@@ -1,0 +1,117 @@
+version: '3.8'
+
+services:
+  # Traefik Edge Router (Reverse Proxy)
+  traefik:
+    image: traefik:v2.10
+    container_name: superbot_traefik
+    command:
+      - "--api.insecure=true"
+      - "--providers.docker=true"
+      - "--providers.docker.exposedbydefault=false"
+      - "--entrypoints.web.address=:80"
+      # Uncomment for SSL when you get a domain
+      # - "--entrypoints.websecure.address=:443"
+      # - "--certificatesresolvers.myresolver.acme.tlschallenge=true"
+      # - "--certificatesresolvers.myresolver.acme.email=your_email@example.com"
+      # - "--certificatesresolvers.myresolver.acme.storage=/letsencrypt/acme.json"
+    ports:
+      - "80:80"
+      # - "443:443"
+    volumes:
+      - "/var/run/docker.sock:/var/run/docker.sock:ro"
+      - "./letsencrypt:/letsencrypt"
+    networks:
+      - superbot_network
+
+  # SuperBot Backend
+  backend:
+    build: .
+    container_name: superbot_backend
+    restart: always
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    env_file:
+      - .env
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.backend.rule=PathPrefix(`/api`)"
+      - "traefik.http.services.backend.loadbalancer.server.port=3000"
+    networks:
+      - superbot_network
+
+  # SuperBot Web Dashboard
+  frontend:
+    build: 
+      context: ../nft-intelligence-dashboard
+      dockerfile: Dockerfile
+    container_name: superbot_frontend
+    restart: always
+    labels:
+      - "traefik.enable=true"
+      - "traefik.http.routers.frontend.rule=PathPrefix(`/`)"
+      - "traefik.http.services.frontend.loadbalancer.server.port=80"
+    networks:
+      - superbot_network
+
+  # ClickHouse Database (Phase 9)
+  clickhouse:
+    image: clickhouse/clickhouse-server:latest
+    container_name: superbot_clickhouse
+    restart: always
+    environment:
+      CLICKHOUSE_DB: superbot_analytics
+      CLICKHOUSE_USER: default
+      CLICKHOUSE_PASSWORD: ${CLICKHOUSE_PASSWORD:-supersecret}
+    volumes:
+      - clickhouse_data:/var/lib/clickhouse
+    ports:
+      - "8123:8123"
+    networks:
+      - superbot_network
+
+  # PostgreSQL Database
+  postgres:
+    image: postgres:15-alpine
+    container_name: superbot_postgres
+    restart: always
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-bot_admin}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-supersecretpassword}
+      POSTGRES_DB: ${POSTGRES_DB:-superbot_prod}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-bot_admin} -d ${POSTGRES_DB:-superbot_prod}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - superbot_network
+
+  # Redis Message Queue
+  redis:
+    image: redis:7-alpine
+    container_name: superbot_redis
+    restart: always
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+    networks:
+      - superbot_network
+
+volumes:
+  postgres_data:
+  redis_data:
+  clickhouse_data:
+
+networks:
+  superbot_network:
+    driver: bridge
