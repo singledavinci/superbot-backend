@@ -227,7 +227,7 @@ export class AdminAPI {
     }
 
     public start() {
-        this.app.listen(this.port, () => {
+        this.app.listen(this.port, '0.0.0.0', () => {
             console.log(`🌐 Admin API Dashboard Server listening on port ${this.port}`);
         });
     }
