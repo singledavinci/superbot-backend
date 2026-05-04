@@ -25,7 +25,11 @@ export class BlockchainIndexer {
         for (const chain of this.supportedChains) {
             const rpcUrl = process.env[chain.rpcEnvKey];
             if (rpcUrl) {
-                this.providers.set(chain.name, new WebSocketProvider(rpcUrl));
+                try {
+                    this.providers.set(chain.name, new WebSocketProvider(rpcUrl));
+                } catch (error) {
+                    console.error(`❌ Failed to initialize provider for ${chain.name}:`, error);
+                }
             } else {
                 console.warn(`[Indexer] Skipping ${chain.name} - ${chain.rpcEnvKey} is not set in .env`);
             }
