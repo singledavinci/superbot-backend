@@ -1,5 +1,5 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
+// SuperBot Prisma Schema
+// learn more: https://pris.ly/d/prisma-schema
 
 generator client {
   provider = "prisma-client-js"
@@ -9,78 +9,75 @@ datasource db {
   provider = "postgresql"
 }
 
+// --- Core Multi-Tenant Models ---
+
 model Guild {
-  id             String          @id // Discord Guild ID
-  name           String
-  ownerId        String
-  planTier       String          @default("FREE")
-  settings       Json?
-  alertChannels  AlertChannel[]
-  alertRules     AlertRule[]
-  createdAt      DateTime        @default(now())
-  updatedAt      DateTime        @updatedAt
+  id              String             @id @default(uuid())
+  discordId       String             @unique  // Discord Guild (Server) ID
+  name            String
+  planTier        String             @default("FREE")
+  settings        Json?
+  alertChannels   AlertChannel[]
+  trackedWallets  TrackedWallet[]
+  trackedCollections TrackedCollection[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
 }
 
 model User {
-  id                   String      @id // Discord User ID
-  walletAddress        String?
-  globalPremiumStatus  Boolean     @default(false)
-  watchlists           Watchlist[]
-  createdAt            DateTime    @default(now())
-  updatedAt            DateTime    @updatedAt
+  id                  String      @id @default(uuid())
+  discordId           String      @unique
+  walletAddress       String?
+  globalPremiumStatus Boolean     @default(false)
+  watchlists          Watchlist[]
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
 }
+
+// --- Alert Infrastructure ---
 
 model AlertChannel {
-  id         String     @id @default(uuid())
-  guildId    String
-  channelId  String     // Discord Channel ID
-  purpose    String     // e.g., "whale-watch", "nft-sales"
-  rolesToPing String[]  // Array of Discord Role IDs
-  guild      Guild      @relation(fields: [guildId], references: [id])
-  alertRules AlertRule[]
-  createdAt  DateTime   @default(now())
-  updatedAt  DateTime   @updatedAt
-
-  @@unique([guildId, channelId])
+  id               String          @id @default(uuid())
+  guildId          String
+  discordChannelId String          @unique  // Discord Channel ID
+  name             String
+  alertType        String          // "WHALE_BUY" | "MINT_RADAR" | "COLLECTION_TRACK" | "FLOOR_DROP"
+  guild            Guild           @relation(fields: [guildId], references: [id])
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
 }
 
+// --- Tracking Models ---
+
 model TrackedWallet {
-  id                     String      @id @default(uuid())
-  address                String      @unique
-  label                  String?
-  globalSmartMoneyScore  Float?
-  createdAt              DateTime    @default(now())
-  updatedAt              DateTime    @updatedAt
-  alertRules             AlertRule[]
+  id               String    @id @default(uuid())
+  guildId          String
+  address          String
+  label            String?
+  alertChannelId   String?               // Discord channel ID (string, not FK)
+  smartMoneyScore  Float?
+  winRate          Float?
+  totalFlips       Int?
+  guild            Guild     @relation(fields: [guildId], references: [id])
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([address, guildId])           // Per-guild tracking (same wallet, multiple servers)
 }
 
 model TrackedCollection {
-  id              String      @id @default(uuid())
-  contractAddress String      @unique
-  slug            String?
-  chain           String      @default("ethereum")
-  createdAt       DateTime    @default(now())
-  updatedAt       DateTime    @updatedAt
-  alertRules      AlertRule[]
-}
+  id               String    @id @default(uuid())
+  guildId          String
+  contractAddress  String
+  name             String
+  chain            String    @default("ethereum")
+  floorAlertPct    Float?                // Alert when floor drops by this %
+  alertChannelId   String?               // Discord channel ID (string, not FK)
+  guild            Guild     @relation(fields: [guildId], references: [id])
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
 
-model AlertRule {
-  id                  String             @id @default(uuid())
-  guildId             String
-  channelId           String
-  type                String             // "wallet_buy", "floor_drop", etc.
-  targetWalletId      String?
-  targetCollectionId  String?
-  threshold           Float?             // e.g., 0.5 ETH for floor_drop
-  isActive            Boolean            @default(true)
-  
-  guild               Guild              @relation(fields: [guildId], references: [id])
-  channel             AlertChannel       @relation(fields: [channelId], references: [id])
-  wallet              TrackedWallet?     @relation(fields: [targetWalletId], references: [id])
-  collection          TrackedCollection? @relation(fields: [targetCollectionId], references: [id])
-
-  createdAt           DateTime           @default(now())
-  updatedAt           DateTime           @updatedAt
+  @@unique([contractAddress, guildId])
 }
 
 model Watchlist {

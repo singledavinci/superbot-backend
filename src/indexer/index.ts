@@ -47,43 +47,54 @@ export class BlockchainIndexer {
     private attachProviderListeners(chainName: string, provider: WebSocketProvider) {
         console.log(`[Indexer] Connecting to ${chainName}...`);
 
-        provider.on({ topics: [TRANSFER_EVENT_SIG] }, async (log: Log) => {
-            try {
-                if (log.topics.length === 4) { 
-                    const contract = log.address.toLowerCase();
-                    const from = `0x${log.topics[1].slice(26)}`.toLowerCase();
-                    const to = `0x${log.topics[2].slice(26)}`.toLowerCase();
-                    const tokenId = BigInt(log.topics[3]).toString();
+        const disableGlobal = process.env.DISABLE_GLOBAL_SCAN === 'true';
 
-                    const eventId = `${chainName}-${log.transactionHash}-${log.index}`; 
+        if (!disableGlobal) {
+            provider.on({ topics: [TRANSFER_EVENT_SIG] }, async (log: Log) => {
+                try {
+                    if (log.topics.length === 4) { 
+                        const contract = log.address.toLowerCase();
+                        const from = `0x${log.topics[1].slice(26)}`.toLowerCase();
+                        const to = `0x${log.topics[2].slice(26)}`.toLowerCase();
+                        const tokenId = BigInt(log.topics[3]).toString();
 
-                    await eventQueue.add('nft_transfer', {
-                        eventId,
-                        chain: chainName,
-                        contract,
-                        from,
-                        to,
-                        tokenId,
-                        txHash: log.transactionHash,
-                        blockNumber: log.blockNumber
-                    }, { jobId: eventId }); 
+                        const eventId = `${chainName}-${log.transactionHash}-${log.index}`; 
+
+                        await eventQueue.add('nft_transfer', {
+                            eventId,
+                            chain: chainName,
+                            contract,
+                            from,
+                            to,
+                            tokenId,
+                            txHash: log.transactionHash,
+                            blockNumber: log.blockNumber
+                        }, { jobId: eventId }); 
+                    }
+                } catch (error) {
+                    // Ignore parse errors on malformed logs
                 }
-            } catch (error) {
-                // Ignore parse errors on malformed logs
-            }
+            });
+        } else {
+            console.log(`[Indexer] Global Scan is DISABLED for ${chainName} (Credit Saving Mode)`);
+        }
+
+        const ws = (provider.websocket as any);
+        
+        ws.on('error', (err: any) => {
+            console.error(`❌ WebSocket error for ${chainName}:`, err.message || err);
         });
 
-        (provider.websocket as any).on('close', () => {
-            console.error(`❌ WebSocket disconnected for ${chainName}! Initiating reconnect...`);
+        ws.on('close', () => {
+            console.error(`❌ WebSocket disconnected for ${chainName}! Reconnecting in 30s...`);
             setTimeout(() => {
-                // Re-initialize provider
                 const rpcUrl = process.env[this.supportedChains.find(c => c.name === chainName)?.rpcEnvKey || ''];
-                if (rpcUrl) {
+                if (rpcUrl && rpcUrl.startsWith('wss://')) {
                     const newProvider = new WebSocketProvider(rpcUrl);
                     this.providers.set(chainName, newProvider);
                     this.attachProviderListeners(chainName, newProvider);
                 }
-            }, 5000);
+            }, 30000);
         });
 
         console.log(`✅ Indexer successfully attached to ${chainName} WebSocket`);

@@ -98,40 +98,116 @@ class AdminAPI {
                 res.status(500).send('Authentication failed');
             }
         });
-        // 3. Get Guild Alert Rules
+        // 3. Get Guild Alert Channels
         this.app.get('/api/v1/guilds/:id/rules', async (req, res) => {
             try {
-                const guildId = req.params.id;
-                const rules = await db_1.prisma.alertRule.findMany({
-                    where: { guildId },
-                    include: { channel: true, wallet: true, collection: true }
-                });
+                const discordGuildId = req.params.id;
+                const guild = await db_1.prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+                if (!guild)
+                    return res.json({ rules: [] });
+                const channels = await db_1.prisma.alertChannel.findMany({ where: { guildId: guild.id } });
+                const wallets = await db_1.prisma.trackedWallet.findMany({ where: { guildId: guild.id } });
+                const collections = await db_1.prisma.trackedCollection.findMany({ where: { guildId: guild.id } });
+                // Map to a unified rules format for the frontend
+                const rules = [
+                    ...channels.map(c => ({ id: c.id, type: c.alertType, target: 'Global', channelId: c.discordChannelId, status: 'Active', signals: 0 })),
+                    ...wallets.map(w => ({ id: w.id, type: 'WHALE_BUY', target: w.address, channelId: w.alertChannelId ?? '—', status: 'Active', signals: 0 })),
+                    ...collections.map(col => ({ id: col.id, type: 'COLLECTION_TRACK', target: col.name, channelId: col.alertChannelId ?? '—', status: 'Active', signals: 0 })),
+                ];
                 res.json({ rules });
             }
             catch (error) {
                 res.status(500).json({ error: 'Database query failed' });
             }
         });
-        // 4. Create/Update Alert Rule
-        this.app.post('/api/v1/guilds/:id/rules', async (req, res) => {
-            // Note: Add auth middleware to verify user is Guild Admin
+        // 4. Add a tracked wallet via API
+        this.app.post('/api/v1/guilds/:id/wallets', async (req, res) => {
             try {
-                const guildId = req.params.id;
-                const { channelId, type, targetWalletId, targetCollectionId } = req.body;
-                // For MVP, just a raw insert
-                const rule = await db_1.prisma.alertRule.create({
-                    data: {
-                        guildId,
-                        channelId,
-                        type,
-                        targetWalletId,
-                        targetCollectionId
-                    }
+                const discordGuildId = req.params.id;
+                const { address, label, alertChannelId } = req.body;
+                const guild = await db_1.prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+                if (!guild)
+                    return res.status(404).json({ error: 'Guild not found' });
+                const wallet = await db_1.prisma.trackedWallet.upsert({
+                    where: { address_guildId: { address: address.toLowerCase(), guildId: guild.id } },
+                    create: { guildId: guild.id, address: address.toLowerCase(), label, alertChannelId },
+                    update: { label, alertChannelId }
                 });
-                res.json({ success: true, rule });
+                res.json({ success: true, wallet });
             }
             catch (error) {
-                res.status(500).json({ error: 'Failed to create rule' });
+                res.status(500).json({ error: 'Failed to track wallet' });
+            }
+        });
+        // 5. Delete a tracked wallet
+        this.app.delete('/api/v1/guilds/:id/wallets/:walletId', async (req, res) => {
+            try {
+                const discordGuildId = req.params.id;
+                const guild = await db_1.prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+                if (!guild)
+                    return res.status(404).json({ error: 'Guild not found' });
+                await db_1.prisma.trackedWallet.deleteMany({
+                    where: { id: req.params.walletId, guildId: guild.id }
+                });
+                res.json({ success: true });
+            }
+            catch (error) {
+                res.status(500).json({ error: 'Failed to delete wallet' });
+            }
+        });
+        // 6. Add a tracked collection
+        this.app.post('/api/v1/guilds/:id/collections', async (req, res) => {
+            try {
+                const discordGuildId = req.params.id;
+                const { contract, name, floorAlertPct, alertChannelId } = req.body;
+                const guild = await db_1.prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+                if (!guild)
+                    return res.status(404).json({ error: 'Guild not found' });
+                const collection = await db_1.prisma.trackedCollection.upsert({
+                    where: { contractAddress_guildId: { contractAddress: contract.toLowerCase(), guildId: guild.id } },
+                    create: { guildId: guild.id, contractAddress: contract.toLowerCase(), name, floorAlertPct: floorAlertPct ?? null, alertChannelId: alertChannelId ?? null },
+                    update: { name, floorAlertPct: floorAlertPct ?? null }
+                });
+                res.json({ success: true, collection });
+            }
+            catch (error) {
+                res.status(500).json({ error: 'Failed to track collection' });
+            }
+        });
+        // 7. Delete a tracked collection
+        this.app.delete('/api/v1/guilds/:id/collections/:collectionId', async (req, res) => {
+            try {
+                const discordGuildId = req.params.id;
+                const guild = await db_1.prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+                if (!guild)
+                    return res.status(404).json({ error: 'Guild not found' });
+                await db_1.prisma.trackedCollection.deleteMany({
+                    where: { id: req.params.collectionId, guildId: guild.id }
+                });
+                res.json({ success: true });
+            }
+            catch (error) {
+                res.status(500).json({ error: 'Failed to delete collection' });
+            }
+        });
+        // 8. Guild status summary
+        this.app.get('/api/v1/guilds/:id/status', async (req, res) => {
+            try {
+                const guild = await db_1.prisma.guild.findUnique({
+                    where: { discordId: req.params.id },
+                    include: { alertChannels: true, trackedWallets: true, trackedCollections: true }
+                });
+                if (!guild)
+                    return res.status(404).json({ error: 'Guild not found' });
+                res.json({
+                    plan: guild.planTier,
+                    channels: guild.alertChannels.length,
+                    wallets: guild.trackedWallets.length,
+                    collections: guild.trackedCollections.length,
+                });
+            }
+            catch (error) {
+                res.status(500).json({ error: 'Failed to fetch status' });
             }
         });
     }

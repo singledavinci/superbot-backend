@@ -43,122 +43,79 @@ const db_1 = require("../db");
 dotenv.config();
 const redisConnection = new ioredis_1.default(process.env.REDIS_URL || 'redis://localhost:6379');
 const eventQueue = new bullmq_1.Queue('blockchain_events', { connection: redisConnection });
-async function seedDatabase() {
-    console.log('🌱 Seeding PostgreSQL Database with Mock Tracked Whale...');
-    // We need a dummy guild and channel for the alert rule
-    const guildId = '123456789012345678';
-    const channelId = '987654321098765432';
-    // Mock Guild
-    await db_1.prisma.guild.upsert({
-        where: { id: guildId },
-        update: {},
-        create: {
-            id: guildId,
-            name: 'Alpha Test Server',
-            ownerId: '9999999999'
-        }
-    });
-    // Mock Alert Channel
-    await db_1.prisma.alertChannel.upsert({
-        where: { guildId_channelId: { guildId, channelId } },
-        update: {},
-        create: {
-            guildId,
-            channelId,
-            purpose: 'whale-watch',
-            rolesToPing: []
-        }
-    });
-    // Mock Tracked Wallet (Pranksy or similar famous whale)
-    const whaleAddress = '0xd387a6e4e84a6c86bd90c158c6028a58cc8ac459';
-    const wallet = await db_1.prisma.trackedWallet.upsert({
-        where: { address: whaleAddress },
-        update: {},
-        create: {
-            address: whaleAddress,
-            label: 'Pranksy',
-            globalSmartMoneyScore: 92.5
-        }
-    });
-    // Mock Alert Rule (Route Whale Buys to our Mock Channel)
-    // First, find if rule exists to avoid duplicates
-    const existingRule = await db_1.prisma.alertRule.findFirst({
-        where: { targetWalletId: wallet.id, type: 'wallet_buy' }
-    });
-    if (!existingRule) {
-        await db_1.prisma.alertRule.create({
-            data: {
-                guildId,
-                channelId,
-                type: 'wallet_buy',
-                targetWalletId: wallet.id
-            }
-        });
-    }
-    console.log('✅ Database seeded with Mock Wallet Rule!');
-    return whaleAddress;
-}
 async function simulateWhaleBuy() {
+    console.log('🐳 Simulating Whale Buy Event...\n');
     try {
-        const whaleAddress = await seedDatabase();
-        console.log(`🚀 Simulating Whale Buy Event for ${whaleAddress}...`);
-        const mockEventId = `mock-tx-${Date.now()}`;
-        // This simulates what the BlockchainIndexer normally pushes
-        await eventQueue.add('nft_transfer', {
-            eventId: mockEventId,
-            contract: '0xed5af388653567af2f388e6224dc7c4b3241c544', // Azuki
-            from: '0x0000000000000000000000000000000000000000', // Mint or seller
-            to: whaleAddress, // Pranksy
-            tokenId: '4206',
-            txHash: mockEventId,
-            blockNumber: 17000000
-        }, { jobId: mockEventId });
-        console.log('✅ Simulated event pushed to BullMQ `blockchain_events` queue!');
+        // 1. Seed guild
+        const guild = await db_1.prisma.guild.upsert({
+            where: { discordId: 'MOCK_GUILD_123' },
+            create: { discordId: 'MOCK_GUILD_123', name: 'Test Server' },
+            update: { name: 'Test Server' },
+        });
+        // 2. Seed alert channel
+        await db_1.prisma.alertChannel.upsert({
+            where: { discordChannelId: 'MOCK_CHANNEL_456' },
+            create: { guildId: guild.id, discordChannelId: 'MOCK_CHANNEL_456', name: 'whale-alerts', alertType: 'WHALE_BUY' },
+            update: { alertType: 'WHALE_BUY' },
+        });
+        // 3. Seed tracked whale
+        const WHALE = '0xd8dA6BF26964aF9D7eEd9e03E53415D37aA96045'; // Vitalik
+        await db_1.prisma.trackedWallet.upsert({
+            where: { address_guildId: { address: WHALE, guildId: guild.id } },
+            create: { guildId: guild.id, address: WHALE, label: 'Vitalik', alertChannelId: 'MOCK_CHANNEL_456', smartMoneyScore: 92, winRate: 0.84, totalFlips: 134 },
+            update: { label: 'Vitalik', smartMoneyScore: 92 },
+        });
+        // 4. Push mock transfer event to queue
+        const mockEvent = {
+            eventId: `sim-${Date.now()}`,
+            chain: 'ethereum',
+            contract: '0xBd3531dA5CF5857e7CfAA92426877b022e612cf8', // Pudgy Penguins
+            from: '0x1234567890123456789012345678901234567890',
+            to: WHALE,
+            tokenId: '7771',
+            txHash: `0xSIM${Date.now()}`,
+            blockNumber: 19_000_000,
+        };
+        await eventQueue.add('nft_transfer', mockEvent, { jobId: mockEvent.eventId });
+        console.log('✅ Whale buy event pushed to BullMQ `blockchain_events` queue!');
+        console.log('   Wallet:', WHALE);
+        console.log('   Collection: Pudgy Penguins');
+        console.log('\n👉 Start the bot in another terminal (`npm run start`) to process this event.');
     }
     catch (e) {
-        console.error('❌ Whale Simulation Failed:', e);
+        console.error('❌ Simulation failed:', e);
+    }
+    finally {
+        await db_1.prisma.$disconnect();
+        await redisConnection.quit();
     }
 }
 async function simulateMintRadar() {
+    console.log('\n🚀 Simulating Mint Radar (50 rapid mints)...');
     try {
-        console.log(`🚀 Simulating High-Velocity Mint Event...`);
-        const contract = '0x8a90cab2b38dba80c64b7734e58ee1db38b8992e'; // Doodles
-        const chain = 'ethereum';
-        // Mock a Global Mint Alert Rule
-        const guildId = '123456789012345678';
-        const channelId = '987654321098765432';
-        await db_1.prisma.alertRule.create({
-            data: {
-                guildId,
-                channelId,
-                type: 'global_mint'
-            }
-        });
-        // Fire 50 rapid mint events (from Null Address)
-        for (let i = 0; i < 50; i++) {
-            const mockEventId = `mock-mint-${Date.now()}-${i}`;
+        const CONTRACT = '0xED5AF388653567Af2F388E6224dC7C4b3241C544'; // Azuki
+        for (let i = 0; i < 51; i++) {
             await eventQueue.add('nft_transfer', {
-                eventId: mockEventId,
-                chain,
-                contract,
-                from: '0x0000000000000000000000000000000000000000', // Null Address = Mint
-                to: `0xRandomUser${i}`,
+                eventId: `mint-sim-${i}-${Date.now()}`,
+                chain: 'ethereum',
+                contract: CONTRACT,
+                from: '0x0000000000000000000000000000000000000000', // Null address = mint
+                to: `0xBuyer${i.toString().padStart(40, '0')}`,
                 tokenId: `${i}`,
-                txHash: mockEventId,
-                blockNumber: 17000000
-            }, { jobId: mockEventId });
+                txHash: `0xMINT${i}`,
+                blockNumber: 19_000_001 + i,
+            });
         }
-        console.log('✅ Simulated 50 Mint events pushed to queue!');
-        console.log('👉 The bot should trigger exactly ONE Mint Radar alert if velocity exceeds 50/5min.');
+        console.log('✅ 51 mint events pushed! Mint Radar should fire at 50.');
     }
     catch (e) {
-        console.error('❌ Mint Simulation Failed:', e);
+        console.error('❌ Mint simulation failed:', e);
+    }
+    finally {
+        await redisConnection.quit();
     }
 }
-async function run() {
+(async () => {
     await simulateWhaleBuy();
     await simulateMintRadar();
-    redisConnection.disconnect();
-    await db_1.prisma.$disconnect();
-}
-run();
+})();

@@ -70,19 +70,19 @@ export class EventWorker {
         }
 
         // --- WHALE BUY ALERTS ---
-        const trackedBuyer = await prisma.trackedWallet.findUnique({
-            where: { address: to },
-            include: { alertRules: true }
+        // Find any tracking record across all guilds for this wallet address
+        const trackedBuyers = await prisma.trackedWallet.findMany({
+            where: { address: to }
         });
 
-        if (trackedBuyer) {
+        for (const trackedBuyer of trackedBuyers) {
             const walletProfile = await this.profiler.getWalletProfile(to);
             const report = this.contextEngine.analyzeWhaleBuy(
                 walletProfile,
-                true, // isFirstEntry
-                0.058, // floorChange +5.8%
-                -0.09, // listingChange -9%
-                11 // uniqueBuyers
+                true,   // isFirstEntry
+                0.058,  // floorChange +5.8%
+                -0.09,  // listingChange -9%
+                11      // uniqueBuyers
             );
 
             // Push to ClickHouse Analytics
@@ -91,11 +91,10 @@ export class EventWorker {
                     table: 'superbot_analytics.whale_trades',
                     values: [{
                         timestamp: new Date().toISOString().replace('T', ' ').substring(0, 19),
-                        chain,
-                        contract,
+                        chain, contract,
                         whale_address: to,
                         trade_type: 'BUY',
-                        usd_value: 0, // Would be fetched from a pricing API
+                        usd_value: 0,
                         tx_hash: txHash
                     }],
                     format: 'JSONEachRow'
@@ -104,22 +103,17 @@ export class EventWorker {
                 console.error('[Analytics] Failed to sink whale trade to ClickHouse', err);
             }
 
-            for (const rule of trackedBuyer.alertRules) {
-                if (rule.isActive && rule.type === 'wallet_buy') {
-                    await discordDeliveryQueue.add('discord_alert', {
-                        guildId: rule.guildId,
-                        channelId: rule.channelId,
-                        alertType: 'WHALE_BUY',
-                        contract,
-                        wallet: to,
-                        tokenId,
-                        txHash,
-                        label: trackedBuyer.label,
-                        intelligence: report
-                    }, {
-                        jobId: `alert-${rule.id}-${eventId}`
-                    });
-                }
+            if (trackedBuyer.alertChannelId) {
+                await discordDeliveryQueue.add('discord_alert', {
+                    guildId: trackedBuyer.guildId,
+                    channelId: trackedBuyer.alertChannelId,
+                    alertType: 'WHALE_BUY',
+                    contract, wallet: to, tokenId, txHash,
+                    label: trackedBuyer.label,
+                    intelligence: report
+                }, {
+                    jobId: `alert-${trackedBuyer.id}-${eventId}`
+                });
             }
         }
     }
@@ -140,24 +134,23 @@ export class EventWorker {
 
         if (currentMints === velocityThreshold) {
             console.log(`🚀 [Mint Radar] High velocity detected on ${chain} for ${contract}!`);
-            
-            // In a real app, query DB for channels subscribed to global mint alerts
-            // For MVP, we'll just push a mock alert if a global mint channel exists
-            const mintRules = await prisma.alertRule.findMany({
-                where: { type: 'global_mint' }
+
+            // Find all guild channels configured for MINT_RADAR
+            const mintChannels = await prisma.alertChannel.findMany({
+                where: { alertType: 'MINT_RADAR' },
+                include: { guild: true }
             });
 
-            for (const rule of mintRules) {
+            for (const ch of mintChannels) {
                 await discordDeliveryQueue.add('discord_alert', {
-                    guildId: rule.guildId,
-                    channelId: rule.channelId,
+                    guildId: ch.guild.discordId,
+                    channelId: ch.discordChannelId,
                     alertType: 'MINT_RADAR',
-                    chain,
-                    contract,
+                    chain, contract,
                     velocity: currentMints,
                     timeWindowMin
                 }, {
-                    jobId: `mint-alert-${chain}-${contract}-${Date.now()}` // Debounce built-in
+                    jobId: `mint-alert-${chain}-${contract}-${Date.now()}`
                 });
             }
         }

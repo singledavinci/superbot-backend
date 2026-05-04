@@ -15,9 +15,13 @@ fi
 
 # Bring down existing stack and rebuild
 echo "🔨 Building and starting Docker containers..."
-docker-compose -f docker-compose.prod.yml down
 docker-compose -f docker-compose.prod.yml up -d --build
+
+# Run database migrations
+echo "⚙️  Running database migrations..."
+docker exec superbot_backend npx prisma migrate deploy
 
 echo "✅ Deployment successful!"
 echo "📡 Traefik Dashboard: http://localhost:8080 (if enabled)"
 echo "📡 Web Dashboard: http://YOUR_SERVER_IP"
+echo "📡 Admin API: http://YOUR_SERVER_IP/api/health"
