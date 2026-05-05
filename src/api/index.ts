@@ -53,15 +53,20 @@ export class AdminAPI {
                 });
 
                 const { access_token } = tokenResponse.data;
+                const guildId = req.query.guild_id as string;
 
                 // Fetch user data
                 const userResponse = await axios.get('https://discord.com/api/users/@me', {
                     headers: { Authorization: `Bearer ${access_token}` }
                 });
 
-                // Issue JWT to frontend
+                // Issue JWT to frontend with guild info
                 const jwtToken = jwt.sign(
-                    { id: userResponse.data.id, username: userResponse.data.username },
+                    { 
+                        id: userResponse.data.id, 
+                        username: userResponse.data.username,
+                        guildId: guildId // Crucial: store the guild we just authorized
+                    },
                     process.env.JWT_SECRET || 'super_secret_jwt_key',
                     { expiresIn: '1d' }
                 );
@@ -81,7 +86,7 @@ export class AdminAPI {
                 if (!authHeader) return res.status(401).json({ error: 'No token' });
                 const token = authHeader.split(' ')[1];
                 const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super_secret_jwt_key') as any;
-                res.json({ guildId: decoded.guildId, userId: decoded.userId });
+                res.json({ guildId: decoded.guildId, id: decoded.id, username: decoded.username });
             } catch (error) {
                 res.status(401).json({ error: 'Invalid token' });
             }
