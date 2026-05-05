@@ -29,7 +29,7 @@ export class AdminAPI {
         // 2. Discord OAuth Login Redirect
         this.app.get('/api/v1/auth/discord', (req, res) => {
             const clientId = process.env.DISCORD_CLIENT_ID;
-            const redirectUri = encodeURIComponent(`${process.env.DASHBOARD_URL}/api/v1/auth/discord/callback`);
+            const redirectUri = encodeURIComponent(`${process.env.VITE_API_URL}/api/v1/auth/discord/callback`);
             const scope = 'identify guilds';
             const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}`;
             res.redirect(authUrl);
@@ -47,7 +47,7 @@ export class AdminAPI {
                     client_secret: process.env.DISCORD_CLIENT_SECRET!,
                     grant_type: 'authorization_code',
                     code,
-                    redirect_uri: `${process.env.DASHBOARD_URL}/api/v1/auth/discord/callback`
+                    redirect_uri: `${process.env.VITE_API_URL}/api/v1/auth/discord/callback`
                 }).toString(), {
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
                 });
