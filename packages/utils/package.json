@@ -1,0 +1,13 @@
+{
+  "name": "@superbot/utils",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "ethers": "^6.16.0",
+    "axios": "^1.16.0"
+  }
+}

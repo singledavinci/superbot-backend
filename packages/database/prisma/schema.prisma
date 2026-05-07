@@ -1,0 +1,96 @@
+// SuperBot Prisma Schema
+// learn more: https://pris.ly/d/prisma-schema
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+// --- Core Multi-Tenant Models ---
+
+model Guild {
+  id              String             @id @default(uuid())
+  discordId       String             @unique  // Discord Guild (Server) ID
+  name            String
+  planTier        String             @default("FREE")
+  settings        Json?
+  alertChannels   AlertChannel[]
+  trackedWallets  TrackedWallet[]
+  trackedCollections TrackedCollection[]
+  createdAt       DateTime           @default(now())
+  updatedAt       DateTime           @updatedAt
+}
+
+model User {
+  id                  String      @id @default(uuid())
+  discordId           String      @unique
+  walletAddress       String?     // Primary linked wallet
+  encryptedPrivateKey String?     // Generated sub-wallet for sniping
+  autoMintEnabled     Boolean     @default(false)
+  maxMintPrice        Float       @default(0.1)
+  gasBufferGwei       Float       @default(5.0)
+  globalPremiumStatus Boolean     @default(false)
+  watchlists          Watchlist[]
+  createdAt           DateTime    @default(now())
+  updatedAt           DateTime    @updatedAt
+}
+
+// --- Alert Infrastructure ---
+
+model AlertChannel {
+  id               String          @id @default(uuid())
+  guildId          String
+  discordChannelId String          @unique  // Discord Channel ID
+  name             String
+  alertType        String          // "WHALE_BUY" | "MINT_RADAR" | "COLLECTION_TRACK" | "FLOOR_DROP"
+  guild            Guild           @relation(fields: [guildId], references: [id])
+  createdAt        DateTime        @default(now())
+  updatedAt        DateTime        @updatedAt
+}
+
+// --- Tracking Models ---
+
+model TrackedWallet {
+  id               String    @id @default(uuid())
+  guildId          String
+  address          String
+  label            String?
+  alertChannelId   String?               // Discord channel ID (string, not FK)
+  smartMoneyScore  Float?
+  winRate          Float?
+  totalFlips       Int?
+  guild            Guild     @relation(fields: [guildId], references: [id])
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([address, guildId])           // Per-guild tracking (same wallet, multiple servers)
+}
+
+model TrackedCollection {
+  id               String    @id @default(uuid())
+  guildId          String
+  contractAddress  String
+  name             String
+  chain            String    @default("ethereum")
+  floorAlertPct    Float?                // Alert when floor drops by this %
+  alertChannelId   String?               // Discord channel ID (string, not FK)
+  guild            Guild     @relation(fields: [guildId], references: [id])
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  @@unique([contractAddress, guildId])
+}
+
+model Watchlist {
+  id            String   @id @default(uuid())
+  userId        String
+  targetType    String   // "wallet" or "collection"
+  targetAddress String
+  user          User     @relation(fields: [userId], references: [id])
+  createdAt     DateTime @default(now())
+
+  @@unique([userId, targetType, targetAddress])
+}

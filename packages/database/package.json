@@ -1,0 +1,19 @@
+{
+  "name": "@superbot/database",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "prisma generate && tsc",
+    "db:push": "prisma db push"
+  },
+  "dependencies": {
+    "@prisma/client": "^7.8.0",
+    "@prisma/adapter-pg": "^7.8.0",
+    "pg": "^8.11.3",
+    "prisma": "^7.8.0"
+  },
+  "devDependencies": {
+    "@types/pg": "^8.11.0"
+  }
+}

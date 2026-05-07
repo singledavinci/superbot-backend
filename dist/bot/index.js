@@ -91,6 +91,9 @@ class SuperBot {
                     .setLabel('View on Blur')
                     .setStyle(discord_js_1.ButtonStyle.Link)
                     .setURL(`https://blur.io/collection/${data.contract}`), new discord_js_1.ButtonBuilder()
+                    .setCustomId(`stats_${data.wallet}`)
+                    .setLabel('View Wallet Stats')
+                    .setStyle(discord_js_1.ButtonStyle.Secondary), new discord_js_1.ButtonBuilder()
                     .setCustomId(`mute_${data.wallet}`)
                     .setLabel('Mute this Wallet')
                     .setStyle(discord_js_1.ButtonStyle.Danger));
@@ -120,6 +123,7 @@ class SuperBot {
             const filePath = path_1.default.join(commandsPath, file);
             const command = await Promise.resolve(`${filePath}`).then(s => __importStar(require(s)));
             if ('data' in command && 'execute' in command) {
+                console.log(`📦 Loading command: /${command.data.name}`);
                 this.commands.set(command.data.name, command);
                 restCommands.push(command.data.toJSON());
             }
@@ -127,30 +131,51 @@ class SuperBot {
         if (process.env.DISCORD_CLIENT_ID && process.env.DISCORD_TOKEN) {
             try {
                 const rest = new discord_js_1.REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-                await rest.put(discord_js_1.Routes.applicationCommands(process.env.DISCORD_CLIENT_ID), { body: restCommands });
+                // If DEV_GUILD_ID is provided, register to that guild for INSTANT updates
+                if (process.env.DEV_GUILD_ID) {
+                    console.log(`⚡ Registering ${restCommands.length} commands to DEV GUILD: ${process.env.DEV_GUILD_ID}`);
+                    await rest.put(discord_js_1.Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.DEV_GUILD_ID), { body: restCommands });
+                }
+                else {
+                    console.log(`🌐 Registering ${restCommands.length} commands GLOBALLY (may take 1h)...`);
+                    await rest.put(discord_js_1.Routes.applicationCommands(process.env.DISCORD_CLIENT_ID), { body: restCommands });
+                }
+                console.log('✅ Commands registered successfully.');
             }
             catch (error) {
-                console.error('Error registering commands:', error);
+                console.error('❌ Error registering commands:', error);
             }
         }
     }
     registerEvents() {
         this.client.on('interactionCreate', async (interaction) => {
-            if (!interaction.isChatInputCommand())
-                return;
-            const command = this.commands.get(interaction.commandName);
-            if (!command)
-                return;
-            try {
-                await command.execute(interaction);
-            }
-            catch (error) {
-                console.error(error);
-                if (interaction.replied || interaction.deferred) {
-                    await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+            if (interaction.isChatInputCommand()) {
+                const command = this.commands.get(interaction.commandName);
+                if (!command)
+                    return;
+                try {
+                    await command.execute(interaction);
                 }
-                else {
-                    await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
+                catch (error) {
+                    console.error(error);
+                    if (interaction.replied || interaction.deferred) {
+                        await interaction.followUp({ content: 'There was an error while executing this command!', ephemeral: true });
+                    }
+                    else {
+                        await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
+                    }
+                }
+            }
+            else if (interaction.isButton()) {
+                // Handle interactive buttons from alerts
+                const [action, target] = interaction.customId.split('_');
+                if (action === 'mute') {
+                    // In V2, this would add the wallet to a 'muted' table per-user/guild
+                    await interaction.reply({ content: `🚫 Muted alerts for \`${target}\` in this channel (Mock).`, ephemeral: true });
+                }
+                else if (action === 'stats') {
+                    await interaction.reply({ content: `📊 Fetching detailed historical PnL for \`${target}\`...`, ephemeral: true });
+                    // Trigger the /wallet command logic or similar embed response
                 }
             }
         });

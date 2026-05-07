@@ -1,0 +1,13 @@
+{
+  "name": "@superbot/queue",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "ioredis": "^5.10.1",
+    "dotenv": "^17.4.2"
+  }
+}

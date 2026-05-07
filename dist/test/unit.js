@@ -6,7 +6,7 @@ async function runLocalTests() {
     const engine = new intelligence_1.ContextEngine();
     // Test 1: Wash Trade Detection
     console.log('--- Test 1: Wash Trade Detection ---');
-    const isWash = engine.detectWashTrade('0x123', '0x123', false);
+    const isWash = engine.detectWashTrade('0x123', '0x123', false, 10);
     console.log(`Expected: true, Actual: ${isWash} -> ${isWash ? '✅ PASS' : '❌ FAIL'}`);
     // Test 2: Strong Bullish Context
     console.log('\n--- Test 2: Strong Bullish Context ---');

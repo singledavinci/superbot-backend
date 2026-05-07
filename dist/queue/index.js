@@ -41,7 +41,9 @@ const bullmq_1 = require("bullmq");
 const ioredis_1 = __importDefault(require("ioredis"));
 const dotenv = __importStar(require("dotenv"));
 dotenv.config();
-exports.redisConnection = new ioredis_1.default(process.env.REDIS_URL || 'redis://localhost:6379');
+exports.redisConnection = new ioredis_1.default(process.env.REDIS_URL || 'redis://localhost:6379', {
+    maxRetriesPerRequest: null
+});
 exports.redisConnection.on('error', (err) => {
     console.error('❌ Redis connection error:', err);
 });

@@ -22,11 +22,12 @@ async function execute(interaction) {
     const whaleChannel = interaction.options.getChannel('whale-channel');
     const mintChannel = interaction.options.getChannel('mint-channel');
     try {
-        // Upsert guild record
+        const guildName = interaction.guild?.name || 'Discord Server';
+        // Upsert guild record - Default to PRO tier to remove monetization boundaries
         await db_1.prisma.guild.upsert({
             where: { discordId: guildId },
-            create: { discordId: guildId, name: interaction.guild.name },
-            update: { name: interaction.guild.name },
+            create: { discordId: guildId, name: guildName, planTier: 'PRO' },
+            update: { name: guildName, planTier: 'PRO' },
         });
         const guild = await db_1.prisma.guild.findUnique({ where: { discordId: guildId } });
         if (!guild)
@@ -34,12 +35,12 @@ async function execute(interaction) {
         // Create default alert rules
         await db_1.prisma.alertChannel.upsert({
             where: { discordChannelId: whaleChannel.id },
-            create: { guildId: guild.id, discordChannelId: whaleChannel.id, name: whaleChannel.name, alertType: 'WHALE_BUY' },
+            create: { guildId: guild.id, discordChannelId: whaleChannel.id, name: whaleChannel.name || 'whale-alerts', alertType: 'WHALE_BUY' },
             update: { alertType: 'WHALE_BUY' },
         });
         await db_1.prisma.alertChannel.upsert({
             where: { discordChannelId: mintChannel.id },
-            create: { guildId: guild.id, discordChannelId: mintChannel.id, name: mintChannel.name, alertType: 'MINT_RADAR' },
+            create: { guildId: guild.id, discordChannelId: mintChannel.id, name: mintChannel.name || 'mint-alerts', alertType: 'MINT_RADAR' },
             update: { alertType: 'MINT_RADAR' },
         });
         const embed = new discord_js_1.EmbedBuilder()

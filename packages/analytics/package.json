@@ -1,0 +1,14 @@
+{
+  "name": "@superbot/analytics",
+  "version": "1.0.0",
+  "main": "dist/index.js",
+  "types": "dist/index.d.ts",
+  "scripts": {
+    "build": "tsc"
+  },
+  "dependencies": {
+    "@clickhouse/client": "^1.18.3",
+    "@superbot/database": "*",
+    "@superbot/types": "*"
+  }
+}
