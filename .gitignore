@@ -8,3 +8,9 @@ apps/*/dist
 packages/*/node_modules
 apps/*/node_modules
 /generated/prisma
+*.js
+*.d.ts
+*.js.map
+!dist/**/*.js
+!dist/**/*.d.ts
+!dist/**/*.js.map
