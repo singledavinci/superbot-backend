@@ -10,7 +10,7 @@ dotenv.config();
 
 export class AdminAPI {
     private app = express();
-    private port = process.env.PORT || 3000;
+    private port = Number(process.env.PORT) || 3000;
 
     constructor() {
         this.app.use(cors());
