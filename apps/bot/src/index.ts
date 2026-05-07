@@ -167,3 +167,11 @@ export class SuperBot {
         });
     }
 }
+
+if (require.main === module) {
+    const bot = new SuperBot();
+    bot.start().catch(err => {
+        console.error('❌ Failed to start SuperBot:', err);
+        process.exit(1);
+    });
+}

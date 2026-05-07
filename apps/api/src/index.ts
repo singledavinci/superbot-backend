@@ -313,3 +313,8 @@ export class AdminAPI {
         });
     }
 }
+
+if (require.main === module) {
+    const api = new AdminAPI();
+    api.start();
+}

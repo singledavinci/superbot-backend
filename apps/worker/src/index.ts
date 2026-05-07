@@ -189,3 +189,11 @@ export class EventWorker {
         }
     }
 }
+
+if (require.main === module) {
+    const worker = new EventWorker();
+    worker.start().catch(err => {
+        console.error('❌ Failed to start Event Worker:', err);
+        process.exit(1);
+    });
+}

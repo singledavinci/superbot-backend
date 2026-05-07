@@ -8,12 +8,10 @@
     "packages/*"
   ],
   "scripts": {
-    "start:bot": "npm run start -w apps/bot",
-    "start:indexer": "npm run start -w apps/indexer",
-    "start:worker": "npm run start -w apps/worker",
-    "start:api": "npm run start -w apps/api",
-    "start": "node dist/index.js",
-    "dev": "ts-node src/index.ts",
+    "start:bot": "node dist/apps/bot/src/index.js",
+    "start:indexer": "node dist/apps/indexer/src/index.js",
+    "start:worker": "node dist/apps/worker/src/index.js",
+    "start:api": "node dist/apps/api/src/index.js",
     "build": "prisma generate --schema=packages/database/prisma/schema.prisma && tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

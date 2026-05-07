@@ -11,7 +11,11 @@
     "@superbot/database": "*",
     "@superbot/intelligence": "*",
     "@superbot/types": "*",
+    "@superbot/queue": "*",
+    "@superbot/analytics": "*",
+    "@superbot/utils": "*",
     "bullmq": "^5.76.5",
+    "ethers": "^6.16.0",
     "dotenv": "^17.4.2"
   }
 }

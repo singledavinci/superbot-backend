@@ -151,3 +151,11 @@ export class BlockchainIndexer {
         });
     }
 }
+
+if (require.main === module) {
+    const indexer = new BlockchainIndexer();
+    indexer.start().catch(err => {
+        console.error('❌ Failed to start Blockchain Indexer:', err);
+        process.exit(1);
+    });
+}

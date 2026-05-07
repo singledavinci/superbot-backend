@@ -10,6 +10,7 @@
   "dependencies": {
     "@superbot/database": "*",
     "@superbot/types": "*",
+    "@superbot/queue": "*",
     "ethers": "^6.16.0",
     "ioredis": "^5.10.1",
     "dotenv": "^17.4.2"
