@@ -96,7 +96,9 @@ export class SuperBot {
         const commandsPath = path.join(__dirname, 'commands');
         if (!fs.existsSync(commandsPath)) return;
 
-        const commandFiles = fs.readdirSync(commandsPath).filter(file => file.endsWith('.ts') || file.endsWith('.js'));
+        const commandFiles = fs.readdirSync(commandsPath).filter(file => 
+            (file.endsWith('.ts') || file.endsWith('.js')) && !file.endsWith('.d.ts')
+        );
 
         const restCommands = [];
 
