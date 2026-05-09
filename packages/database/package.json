@@ -1,8 +1,8 @@
 {
   "name": "@superbot/database",
   "version": "1.0.0",
-  "main": "../../dist/packages/database/src/index.js",
-  "types": "../../dist/packages/database/src/index.d.ts",
+  "main": "../../../dist/packages/database/src/index.js",
+  "types": "../../../dist/packages/database/src/index.d.ts",
   "scripts": {
     "build": "prisma generate && tsc",
     "db:push": "prisma db push"
