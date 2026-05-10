@@ -10,3 +10,5 @@ export * from './SmartMoneyClusterDetector';
 export * from './MassListingDetector';
 export * from './NFTMetadata';
 export * from './WalletProfile';
+export * from './rpcUrls';
+export * from './RpcPool';

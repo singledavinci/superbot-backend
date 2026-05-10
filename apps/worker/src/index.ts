@@ -8,6 +8,8 @@ import {
     SmartMoneyClusterDetector,
     NFTMetadataClient,
     WalletProfileClient,
+    createRpcPoolFromEnv,
+    resolveHttpRpcUrl,
     type NormalizedSale,
     type SweepDetection,
     type ClusterBuyDetection,
@@ -16,26 +18,7 @@ import {
 } from '@superbot/analytics';
 import { SniperEngine } from '@superbot/utils';
 import { ContextEngine, SaleDetector } from '@superbot/intelligence';
-import { ethers, JsonRpcProvider } from 'ethers';
-
-/**
- * SaleDetector and other JsonRpcProvider clients require an HTTP(S) endpoint;
- * passing them a `wss://` URL produces silent failures. We accept either an
- * explicit HTTPS env var or fall back to converting the WSS URL to HTTPS,
- * since Alchemy serves both at the same host.
- */
-function resolveHttpRpcUrl(wssEnv: string, httpEnv: string): string | null {
-    const explicit = process.env[httpEnv]?.trim();
-    if (explicit) return explicit;
-
-    const wss = process.env[wssEnv]?.trim();
-    if (!wss) return null;
-    if (wss.startsWith('http://') || wss.startsWith('https://')) return wss;
-    if (wss.startsWith('wss://')) return 'https://' + wss.slice('wss://'.length);
-    if (wss.startsWith('ws://')) return 'http://' + wss.slice('ws://'.length);
-    return null;
-}
-
+import type { JsonRpcProvider } from 'ethers';
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 
@@ -46,7 +29,6 @@ export class EventWorker {
     private sweepDetector = new SweepDetector();
     private clusterDetector = new SmartMoneyClusterDetector();
     private saleDetectors = new Map<string, SaleDetector>();
-    private providers = new Map<string, JsonRpcProvider>();
     private profileCache = new Map<string, { profile: any, timestamp: number }>();
     private CACHE_TTL = 10 * 60 * 1000; // 10 minutes
     private SNIPING_ENABLED = false; // Hard-disabled for security per audit
@@ -62,12 +44,21 @@ export class EventWorker {
     constructor() {
         // Ethereum-only deployment. Re-add other chains here together with their
         // *_WSS_RPC_URL env vars when expanding multi-chain support.
-        const ethHttpUrl = resolveHttpRpcUrl('WSS_RPC_URL', 'HTTPS_RPC_URL');
-        if (ethHttpUrl) {
-            this.providers.set('ethereum', new JsonRpcProvider(ethHttpUrl));
-            this.saleDetectors.set('ethereum', new SaleDetector(ethHttpUrl));
+        const pool = createRpcPoolFromEnv();
+        if (pool && pool.httpsUrls.length > 0) {
+            const pooled = {
+                getHttpsProvider: () => pool.getHttpsProvider(),
+                markHttpsSuccess: (p: JsonRpcProvider) => pool.markHttpsSuccess(p),
+                markHttps429: (p: JsonRpcProvider) => pool.markHttps429(p),
+            };
+            this.saleDetectors.set('ethereum', new SaleDetector(pooled));
         } else {
-            console.warn('[Worker] No Ethereum RPC URL configured; sale detection will be disabled.');
+            const ethHttpUrl = resolveHttpRpcUrl('WSS_RPC_URL', 'HTTPS_RPC_URL');
+            if (ethHttpUrl) {
+                this.saleDetectors.set('ethereum', new SaleDetector(ethHttpUrl));
+            } else {
+                console.warn('[Worker] No Ethereum RPC URL configured; sale detection will be disabled.');
+            }
         }
     }
 
