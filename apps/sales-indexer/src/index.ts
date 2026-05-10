@@ -1,3 +1,4 @@
+import { createHash } from 'crypto';
 import * as dotenv from 'dotenv';
 import { eventQueue } from '@superbot/queue';
 import { prisma } from '@superbot/database';
@@ -24,9 +25,14 @@ dotenv.config();
  *   4. Disabled. The service stays alive so Railway does not crash-loop;
  *      live sales still flow through the on-chain SaleDetector path.
  *
- * Idempotency: the provider's stable `eventId` is reused as the BullMQ jobId,
- * so duplicates seen across polling cycles are dropped at the queue layer.
+ * Idempotency: the provider's stable `eventId` is hashed for BullMQ `jobId`
+ * (BullMQ forbids ":" in custom ids; OpenSea/Reservoir ids use ":"). Payload
+ * still carries the original `eventId` for the worker pipeline.
  */
+function bullMqJobId(eventId: string): string {
+    return createHash('sha256').update(eventId, 'utf8').digest('hex');
+}
+
 export class SalesIndexer {
     private provider: SalesProvider | null = null;
     private pollIntervalMs = Number(
@@ -92,76 +98,103 @@ export class SalesIndexer {
     private async tick() {
         if (!this.provider) return;
 
-        const collections = await prisma.trackedCollection.findMany({
-            select: { contractAddress: true, chain: true },
-        });
-        if (collections.length === 0) return;
+        try {
+            const collections = await prisma.trackedCollection.findMany({
+                select: { contractAddress: true, chain: true },
+            });
+            if (collections.length === 0) return;
 
-        // Ethereum-only deployment: skip rows on other chains.
-        const unique = new Map<string, { contract: string; chain: 'ethereum' }>();
-        for (const c of collections) {
-            const chain = (c.chain || 'ethereum').toLowerCase();
-            if (chain !== 'ethereum') continue;
-            const contract = c.contractAddress.toLowerCase();
-            unique.set(`${chain}:${contract}`, { contract, chain: 'ethereum' });
+            // Ethereum-only deployment: skip rows on other chains.
+            const unique = new Map<string, { contract: string; chain: 'ethereum' }>();
+            for (const c of collections) {
+                const chain = (c.chain || 'ethereum').toLowerCase();
+                if (chain !== 'ethereum') continue;
+                const contract = c.contractAddress.toLowerCase();
+                unique.set(`${chain}:${contract}`, { contract, chain: 'ethereum' });
+            }
+
+            for (const { contract, chain } of unique.values()) {
+                try {
+                    await this.tickContract(contract, chain);
+                } catch (err) {
+                    console.error(
+                        `[SalesIndexer] (${this.provider.name}) tick failed for ${contract}:`,
+                        err instanceof Error ? err.stack || err.message : err,
+                    );
+                }
+            }
+        } catch (err) {
+            console.error(
+                '[SalesIndexer] tick failed (db or setup):',
+                err instanceof Error ? err.stack || err.message : err,
+            );
+        }
+    }
+
+    private async tickContract(contract: string, chain: 'ethereum') {
+        if (!this.provider) return;
+
+        const key = `${chain}:${contract}`;
+        const cursor = this.cursorByContract.get(key);
+
+        const result = await this.provider.fetchSales({
+            contract,
+            chain,
+            cursor,
+            limit: 50,
+        });
+
+        for (const sale of result.sales) {
+            // Reuse the existing transfer event shape so the worker + bot
+            // pipeline can ingest sales without changes. We tag as
+            // `erc721_transfer` so it routes through `handleTransfer` and
+            // triggers a SALE alert (price > 0, from/to non-zero).
+            await eventQueue.add(
+                'nft_transfer',
+                {
+                    eventId: sale.eventId,
+                    type: 'erc721_transfer',
+                    chain: sale.chain,
+                    contract: sale.contract,
+                    tokenId: sale.tokenId,
+                    txHash: sale.txHash,
+                    blockNumber: sale.blockNumber,
+                    from: sale.seller,
+                    to: sale.buyer,
+                    priceNative: sale.priceNative,
+                    priceUsd: sale.priceUsd,
+                    currency: sale.currency,
+                    marketplace: sale.marketplace,
+                    timestamp: sale.timestamp,
+                },
+                {
+                    jobId: bullMqJobId(sale.eventId),
+                    removeOnComplete: { age: 3600 },
+                    removeOnFail: { age: 86400 },
+                },
+            );
         }
 
-        for (const { contract, chain } of unique.values()) {
-            const key = `${chain}:${contract}`;
-            const cursor = this.cursorByContract.get(key);
+        if (result.nextCursor) {
+            this.cursorByContract.set(key, result.nextCursor);
+        }
 
-            const result = await this.provider.fetchSales({
-                contract,
-                chain,
-                cursor,
-                limit: 50,
-            });
-
-            for (const sale of result.sales) {
-                // Reuse the existing transfer event shape so the worker + bot
-                // pipeline can ingest sales without changes. We tag as
-                // `erc721_transfer` so it routes through `handleTransfer` and
-                // triggers a SALE alert (price > 0, from/to non-zero).
-                await eventQueue.add(
-                    'nft_transfer',
-                    {
-                        eventId: sale.eventId,
-                        type: 'erc721_transfer',
-                        chain: sale.chain,
-                        contract: sale.contract,
-                        tokenId: sale.tokenId,
-                        txHash: sale.txHash,
-                        blockNumber: sale.blockNumber,
-                        from: sale.seller,
-                        to: sale.buyer,
-                        priceNative: sale.priceNative,
-                        priceUsd: sale.priceUsd,
-                        currency: sale.currency,
-                        marketplace: sale.marketplace,
-                        timestamp: sale.timestamp,
-                    },
-                    {
-                        jobId: sale.eventId,
-                        removeOnComplete: { age: 3600 },
-                        removeOnFail: { age: 86400 },
-                    },
-                );
-            }
-
-            if (result.nextCursor) {
-                this.cursorByContract.set(key, result.nextCursor);
-            }
-
-            if (result.sales.length > 0) {
-                console.log(
-                    `[SalesIndexer] (${this.provider.name}) ${result.sales.length} sales for ${contract} -> queue (cursor=${result.nextCursor ?? 'unchanged'})`,
-                );
-            }
+        if (result.sales.length > 0) {
+            console.log(
+                `[SalesIndexer] (${this.provider.name}) ${result.sales.length} sales for ${contract} -> queue (cursor=${result.nextCursor ?? 'unchanged'})`,
+            );
         }
     }
 }
 
 if (require.main === module) {
+    process.on('unhandledRejection', reason => {
+        console.error('[sales-indexer] unhandledRejection:', reason);
+    });
+    process.on('uncaughtException', err => {
+        console.error('[sales-indexer] uncaughtException:', err);
+    });
+
     const svc = new SalesIndexer();
     svc.start().catch(err => {
         console.error('❌ Failed to start SalesIndexer:', err);
