@@ -15,7 +15,14 @@ interface DashboardJwtPayload {
     guildId?: string;
     /** Discord snowflakes where the user may access SuperBot guild routes (staff of that server). */
     eligibleGuildIds?: string[];
+    /** Bumped when JWT claims shape changes; clients must re-auth when stale. */
+    authSchemaVersion?: number;
 }
+
+/** Increment when JWT or session semantics change; embed in new JWTs and surface via `/auth/me`. */
+const AUTH_SCHEMA_VERSION = 2;
+
+type JwtTimingFields = { iat?: number; exp?: number };
 
 /** Discord `@me/guilds` permission flags: Administrator (0x8) or Manage Guild (0x20). */
 function canManageDiscordServer(permissionsRaw: string): boolean {
@@ -43,6 +50,18 @@ function discordGuildsEligibleForJwt(
 function jwtEligibleDiscordGuilds(decoded: DashboardJwtPayload): string[] {
     if (Array.isArray(decoded.eligibleGuildIds) && decoded.eligibleGuildIds.length) {
         const ids = decoded.eligibleGuildIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim());
+        return [...new Set(ids)];
+    }
+    const g = decoded.guildId;
+    return typeof g === 'string' && g.trim() ? [g.trim()] : [];
+}
+
+/** Raw guild list from JWT payload for `/auth/me` (may be empty; never recomputed from Discord). */
+function jwtRawEligibleFromToken(decoded: DashboardJwtPayload): string[] {
+    if (Array.isArray(decoded.eligibleGuildIds)) {
+        const ids = decoded.eligibleGuildIds
+            .filter((id): id is string => typeof id === 'string' && id.trim().length > 0)
+            .map((id) => id.trim());
         return [...new Set(ids)];
     }
     const g = decoded.guildId;
@@ -84,7 +103,7 @@ export class AdminAPI {
             const authHeader = req.headers.authorization;
             if (!authHeader?.startsWith('Bearer ')) {
                 console.warn('[AuthMW] deny reason=no_bearer', { path: req.path, requested: normalizedRoute });
-                res.status(401).json({ error: 'Unauthorized' });
+                res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED', status: 401 });
                 return false;
             }
             const token = authHeader.split(' ')[1];
@@ -99,7 +118,11 @@ export class AdminAPI {
                     tokenEligibleGuildIds: [],
                     discordUserId: decoded.id ?? null,
                 });
-                res.status(403).json({ error: 'Session has no allowed servers — sign out and sign in again.' });
+                res.status(403).json({
+                    error: 'Your session no longer has access to this server. Sign out and sign in again.',
+                    code: 'GUILD_ACCESS_DENIED',
+                    status: 403,
+                });
                 return false;
             }
             if (!eligible.includes(normalizedRoute)) {
@@ -110,15 +133,16 @@ export class AdminAPI {
                     discordUserId: decoded.id ?? null,
                 });
                 res.status(403).json({
-                    error:
-                        'You do not have dashboard access for this Discord server ID. Pick your server from the header dropdown or ensure the bot was added (Guild row synced) and try again.',
+                    error: 'Your session no longer has access to this server. Sign out and sign in again.',
+                    code: 'GUILD_ACCESS_DENIED',
+                    status: 403,
                 });
                 return false;
             }
             return true;
         } catch {
             console.warn('[AuthMW] deny reason=invalid_jwt', { path: req.path, requested: discordGuildId.trim() });
-            res.status(401).json({ error: 'Invalid token' });
+            res.status(401).json({ error: 'Invalid token', code: 'INVALID_TOKEN', status: 401 });
             return false;
         }
     }
@@ -225,12 +249,15 @@ export class AdminAPI {
                         username: userResponse.data.username,
                         guildId: primaryGuildId,
                         eligibleGuildIds,
+                        authSchemaVersion: AUTH_SCHEMA_VERSION,
                     },
                     process.env.JWT_SECRET || 'super_secret_jwt_key',
                     { expiresIn: '1d' },
                 );
 
-                console.log(`[Auth] Issued JWT for ${userResponse.data.username} eligibleGuildIds count=${eligibleGuildIds.length}`);
+                console.log(
+                    `[Auth] Issued JWT gitSha=${GIT_SHA} user=${userResponse.data.username} eligibleGuildIds count=${eligibleGuildIds.length}`,
+                );
 
                 res.redirect(`${dashboardBase}?token=${jwtToken}`);
             } catch (error) {
@@ -243,27 +270,36 @@ export class AdminAPI {
         this.app.get('/api/v1/auth/me', async (req, res) => {
             try {
                 const authHeader = req.headers.authorization;
-                if (!authHeader) return res.status(401).json({ error: 'No token' });
+                if (!authHeader)
+                    return res.status(401).json({ error: 'No token', code: 'NO_TOKEN', status: 401 });
                 const token = authHeader.split(' ')[1];
-                const decoded = jwt.verify(
-                    token,
-                    process.env.JWT_SECRET || 'super_secret_jwt_key',
-                ) as DashboardJwtPayload;
-                const eligible = jwtEligibleDiscordGuilds(decoded);
-                if (!eligible.length) {
-                    return res.status(401).json({ error: 'Token missing guild scope; sign in again.' });
-                }
-                const rawG = decoded.guildId;
-                const trimmedG = typeof rawG === 'string' ? rawG.trim() : undefined;
-                const guildId = trimmedG && eligible.includes(trimmedG) ? trimmedG : eligible[0];
+                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super_secret_jwt_key') as DashboardJwtPayload &
+                    JwtTimingFields;
+
+                const rawEligible = jwtRawEligibleFromToken(decoded);
+                const trimmedPreferred = typeof decoded.guildId === 'string' ? decoded.guildId.trim() : '';
+                const guildId =
+                    rawEligible.length > 0
+                        ? trimmedPreferred && rawEligible.includes(trimmedPreferred)
+                            ? trimmedPreferred
+                            : rawEligible[0]!
+                        : trimmedPreferred || null;
+
+                const authVer = typeof decoded.authSchemaVersion === 'number' ? decoded.authSchemaVersion : 0;
+                const requiresReauth = authVer < AUTH_SCHEMA_VERSION;
+
                 res.json({
+                    userId: decoded.id ?? null,
+                    username: decoded.username ?? null,
                     guildId,
-                    eligibleGuildIds: eligible,
-                    id: decoded.id,
-                    username: decoded.username,
+                    eligibleGuildIds: rawEligible,
+                    jwtIssuedAt:
+                        typeof decoded.iat === 'number' ? new Date(decoded.iat * 1000).toISOString() : null,
+                    gitSha: GIT_SHA,
+                    requiresReauth,
                 });
-            } catch (error) {
-                res.status(401).json({ error: 'Invalid token' });
+            } catch {
+                res.status(401).json({ error: 'Invalid token', code: 'INVALID_TOKEN', status: 401 });
             }
         });
 
@@ -510,6 +546,29 @@ export class AdminAPI {
                 res.status(500).json({ error: 'Failed to update user settings' });
             }
         });
+
+        // Unknown `/api/*` — always JSON (avoids Express default HTML/plain bodies on 404)
+        this.app.use((req: express.Request, res: express.Response, next: express.NextFunction) => {
+            if (req.path.startsWith('/api')) {
+                res.status(404).json({ error: 'Not found', code: 'NOT_FOUND', status: 404 });
+                return;
+            }
+            next();
+        });
+
+        this.app.use(
+            (
+                err: unknown,
+                _req: express.Request,
+                res: express.Response,
+                _next: express.NextFunction,
+            ) => {
+                if (res.headersSent) return;
+                console.error('[API] Unhandled error', err);
+                const message = err instanceof Error ? err.message : 'Internal server error';
+                res.status(500).json({ error: message, code: 'INTERNAL_ERROR', status: 500 });
+            },
+        );
     }
 
     public start() {
