@@ -63,6 +63,12 @@ async function start() {
                 const marketIndexer = new MarketIndexer();
                 await marketIndexer.start();
                 break;
+            case 'floor-worker':
+                console.log('📉 Loading Floor Checker Worker...');
+                const { FloorWorker } = await import('../apps/worker/src/floor-checker');
+                const floorWorker = new FloorWorker();
+                await floorWorker.start();
+                break;
             default:
                 console.log('⚡ No SERVICE_TYPE specified. Running in MONOLITH mode (All services in one process)...');
                 const [BotMod, ApiMod, IndexerMod, WorkerMod] = await Promise.all([

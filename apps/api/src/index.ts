@@ -12,6 +12,28 @@ export class AdminAPI {
     private app = express();
     private port = Number(process.env.PORT) || 3000;
 
+    /** Require Authorization Bearer JWT whose `guildId` matches `req.params.id` (Discord guild snowflake). */
+    private requireGuildAccess(req: express.Request, res: express.Response): boolean {
+        try {
+            const authHeader = req.headers.authorization;
+            if (!authHeader?.startsWith('Bearer ')) {
+                res.status(401).json({ error: 'Unauthorized' });
+                return false;
+            }
+            const token = authHeader.split(' ')[1];
+            const secret = process.env.JWT_SECRET || 'super_secret_jwt_key';
+            const decoded = jwt.verify(token, secret) as { guildId?: string };
+            if (!decoded.guildId || decoded.guildId !== req.params.id) {
+                res.status(403).json({ error: 'Token guild does not match requested guild' });
+                return false;
+            }
+            return true;
+        } catch {
+            res.status(401).json({ error: 'Invalid token' });
+            return false;
+        }
+    }
+
     constructor() {
         this.app.use((req, res, next) => {
             console.log(`[API] ${req.method} ${req.url}`);
@@ -121,6 +143,7 @@ export class AdminAPI {
 
         // 3. Get Guild Alert Channels
         this.app.get('/api/v1/guilds/:id/rules', async (req, res) => {
+            if (!this.requireGuildAccess(req, res)) return;
             try {
                 const discordGuildId = req.params.id;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
@@ -144,6 +167,7 @@ export class AdminAPI {
 
         // 4. Add a tracked wallet via API
         this.app.post('/api/v1/guilds/:id/wallets', async (req, res) => {
+            if (!this.requireGuildAccess(req, res)) return;
             try {
                 const discordGuildId = req.params.id;
                 const { address, label, alertChannelId } = req.body;
@@ -163,6 +187,7 @@ export class AdminAPI {
 
         // 5. Get tracked wallets
         this.app.get('/api/v1/guilds/:id/wallets', async (req, res) => {
+            if (!this.requireGuildAccess(req, res)) return;
             try {
                 const discordGuildId = req.params.id;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
@@ -176,6 +201,7 @@ export class AdminAPI {
 
         // 5b. Delete a tracked wallet
         this.app.delete('/api/v1/guilds/:id/wallets/:walletId', async (req, res) => {
+            if (!this.requireGuildAccess(req, res)) return;
             try {
                 const discordGuildId = req.params.id;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
@@ -192,6 +218,7 @@ export class AdminAPI {
 
         // 6. Get tracked collections
         this.app.get('/api/v1/guilds/:id/collections', async (req, res) => {
+            if (!this.requireGuildAccess(req, res)) return;
             try {
                 const discordGuildId = req.params.id;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
@@ -205,6 +232,7 @@ export class AdminAPI {
 
         // 6b. Add a tracked collection
         this.app.post('/api/v1/guilds/:id/collections', async (req, res) => {
+            if (!this.requireGuildAccess(req, res)) return;
             try {
                 const discordGuildId = req.params.id;
                 const { contract, name, floorAlertPct, alertChannelId } = req.body;
@@ -224,6 +252,7 @@ export class AdminAPI {
 
         // 7. Delete a tracked collection
         this.app.delete('/api/v1/guilds/:id/collections/:collectionId', async (req, res) => {
+            if (!this.requireGuildAccess(req, res)) return;
             try {
                 const discordGuildId = req.params.id;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
@@ -240,6 +269,7 @@ export class AdminAPI {
 
         // 8. Guild status summary
         this.app.get('/api/v1/guilds/:id/status', async (req, res) => {
+            if (!this.requireGuildAccess(req, res)) return;
             try {
                 const guild = await prisma.guild.findUnique({
                     where: { discordId: req.params.id },

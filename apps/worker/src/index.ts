@@ -209,46 +209,63 @@ export class EventWorker {
             console.error('[Worker] ClickHouse insert failed:', err);
         }
 
-        // 4. Alert Delivery
+        // 4. Alert Delivery — route each wallet alert to that wallet's channel (same as `/track-wallet`),
+        // falling back to the guild's default WHALE_BUY channel from `/setup`. BullMQ jobId must include
+        // `channelId` so multiple routes never dedupe each other.
         const combinedTracked = [...trackedBuyers, ...trackedSellers];
-        const uniqueGuilds = new Set(combinedTracked.map(t => t.guildId));
+        const uniqueGuildIds = new Set(combinedTracked.map(t => t.guildId));
 
-        for (const guildId of uniqueGuilds) {
+        for (const gid of uniqueGuildIds) {
             const guild = await prisma.guild.findUnique({
-                where: { id: guildId },
-                include: { alertChannels: true }
+                where: { id: gid },
+                include: { alertChannels: true },
             });
 
             if (!guild) continue;
 
-            const relevantWallets = combinedTracked.filter(t => t.guildId === guildId);
+            const defaultWhaleChannelId =
+                guild.alertChannels.find(c => c.alertType === 'WHALE_BUY')?.discordChannelId ?? null;
+
+            const relevantWallets = combinedTracked.filter(t => t.guildId === gid);
 
             for (const wallet of relevantWallets) {
-                for (const channel of guild.alertChannels) {
-                    if (channel.alertType === 'WHALE_BUY' || channel.alertType === 'COLLECTION_TRACK') {
-                        // Fetch profile (neutral per audit rules)
-                        const profile = await this.profiler.getWalletProfile(to);
-                        const intelligence = this.contextEngine.analyzeWhaleBuy(profile, true, null, null, null);
-
-                        await discordDeliveryQueue.add('discord_alert', {
-                            eventId,
-                            channelId: channel.discordChannelId,
-                            alertType: eventType === 'SALE' ? 'WHALE_SALE' : (eventType === 'MINT' ? 'WHALE_MINT' : 'WHALE_BUY'),
-                            contract,
-                            wallet: to,
-                            label: wallet.label,
-                            tokenId,
-                            txHash,
-                            price,
-                            currency,
-                            marketplace,
-                            intelligence,
-                            mentionRoleId: wallet.mentionRoleId // Pass the role ID from the database
-                        }, {
-                            jobId: `alert-${wallet.id}-${eventId}`
-                        });
-                    }
+                const channelId = wallet.alertChannelId ?? defaultWhaleChannelId;
+                if (!channelId) {
+                    console.warn(
+                        `[Worker] No whale alert channel for wallet ${wallet.address} (guild ${guild.discordId}); skipping.`,
+                    );
+                    continue;
                 }
+
+                const profile = await this.profiler.getWalletProfile(to);
+                const intelligence = this.contextEngine.analyzeWhaleBuy(profile, true, null, null, null);
+
+                await discordDeliveryQueue.add(
+                    'discord_alert',
+                    {
+                        eventId,
+                        channelId,
+                        alertType:
+                            eventType === 'SALE'
+                                ? 'WHALE_SALE'
+                                : eventType === 'MINT'
+                                  ? 'WHALE_MINT'
+                                  : 'WHALE_BUY',
+                        contract,
+                        wallet: to,
+                        label: wallet.label,
+                        tokenId,
+                        txHash,
+                        price,
+                        currency,
+                        marketplace,
+                        intelligence,
+                        mentionRoleId: wallet.mentionRoleId,
+                    },
+                    {
+                        jobId: `alert-${wallet.id}-${eventId}-${channelId}`,
+                    },
+                );
             }
         }
     }
