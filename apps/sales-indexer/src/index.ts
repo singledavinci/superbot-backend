@@ -1,34 +1,63 @@
 import * as dotenv from 'dotenv';
 import { eventQueue } from '@superbot/queue';
 import { prisma } from '@superbot/database';
-import { ReservoirSalesClient } from '@superbot/analytics';
+import {
+    AlchemySalesClient,
+    ReservoirSalesClient,
+    SalesProvider,
+} from '@superbot/analytics';
 
 dotenv.config();
 
 /**
- * SalesIndexer — polls Reservoir for normalized sales of every tracked
- * collection and publishes them into the shared event queue so the
- * existing worker + bot pipeline can deliver alerts.
+ * SalesIndexer — polls a normalized sales source (Alchemy or Reservoir) for
+ * every tracked collection and publishes each sale into the shared event
+ * queue, where the existing worker + bot pipeline takes over and delivers
+ * Discord alerts.
  *
- * Idempotency: Reservoir's stable `eventId` is reused as BullMQ jobId,
- * which means duplicate sales detected across polling cycles are dropped
- * by the queue itself (as long as the previous job is still retained).
+ * Provider selection (first match wins):
+ *   1. Alchemy NFT Sales API — if `ALCHEMY_API_KEY` (or a key extractable
+ *      from `WSS_RPC_URL`) is configured. Preferred because the operator
+ *      already needs an Alchemy key for the WSS RPC.
+ *   2. Reservoir `sales/v6` — if `RESERVOIR_API_KEY` is configured.
+ *   3. Disabled. The service stays alive so Railway does not crash-loop.
+ *
+ * Idempotency: the provider's stable `eventId` is reused as the BullMQ jobId,
+ * so duplicates seen across polling cycles are dropped at the queue layer.
  */
 export class SalesIndexer {
-    private reservoir = new ReservoirSalesClient();
-    private pollIntervalMs = Number(process.env.RESERVOIR_POLL_INTERVAL_MS) || 30_000;
+    private provider: SalesProvider | null = null;
+    private pollIntervalMs = Number(
+        process.env.SALES_POLL_INTERVAL_MS || process.env.RESERVOIR_POLL_INTERVAL_MS,
+    ) || 30_000;
     private timer: NodeJS.Timeout | null = null;
-    private lastSeenByContract = new Map<string, number>();
+
+    // Per (chain:contract) cursor, opaque to us — the provider chooses what to
+    // store (last block for Alchemy, last timestamp for Reservoir).
+    private cursorByContract = new Map<string, string>();
+
+    constructor() {
+        const alchemy = new AlchemySalesClient();
+        const reservoir = new ReservoirSalesClient();
+        if (alchemy.isConfigured()) {
+            this.provider = alchemy;
+        } else if (reservoir.isConfigured()) {
+            this.provider = reservoir;
+        }
+    }
 
     public async start() {
-        if (!this.reservoir.isConfigured()) {
-            console.warn('[SalesIndexer] RESERVOIR_API_KEY not configured; sales indexer is disabled.');
-            // Stay alive so the service does not crash-loop on Railway, but do nothing.
+        if (!this.provider) {
+            console.warn(
+                '[SalesIndexer] No sales provider configured (set ALCHEMY_API_KEY or RESERVOIR_API_KEY). Sales indexer is disabled.',
+            );
             await new Promise(() => {});
             return;
         }
 
-        console.log(`[SalesIndexer] Started. Polling every ${this.pollIntervalMs}ms.`);
+        console.log(
+            `[SalesIndexer] Started with provider="${this.provider.name}". Polling every ${this.pollIntervalMs}ms.`,
+        );
         await this.tick();
         this.timer = setInterval(() => {
             this.tick().catch(err => console.error('[SalesIndexer] tick error:', err));
@@ -40,14 +69,14 @@ export class SalesIndexer {
     }
 
     private async tick() {
-        const collections = await prisma.trackedCollection.findMany({
-            select: { contractAddress: true, chain: true }
-        });
+        if (!this.provider) return;
 
+        const collections = await prisma.trackedCollection.findMany({
+            select: { contractAddress: true, chain: true },
+        });
         if (collections.length === 0) return;
 
-        // Ethereum-only deployment: any collection rows on other chains are skipped
-        // until multi-chain support is re-enabled.
+        // Ethereum-only deployment: skip rows on other chains.
         const unique = new Map<string, { contract: string; chain: 'ethereum' }>();
         for (const c of collections) {
             const chain = (c.chain || 'ethereum').toLowerCase();
@@ -58,48 +87,55 @@ export class SalesIndexer {
 
         for (const { contract, chain } of unique.values()) {
             const key = `${chain}:${contract}`;
-            const sinceUnix = this.lastSeenByContract.get(key);
+            const cursor = this.cursorByContract.get(key);
 
-            const sales = await this.reservoir.fetchSalesForContract(contract, {
+            const result = await this.provider.fetchSales({
+                contract,
                 chain,
-                sinceUnix,
+                cursor,
                 limit: 50,
             });
 
-            if (sales.length === 0) continue;
-
-            let maxTs = sinceUnix ?? 0;
-            for (const sale of sales) {
-                if (sale.timestamp > maxTs) maxTs = sale.timestamp;
-
-                // Reuse the existing transfer event shape so the worker + bot pipeline
-                // can ingest these without changes. We pass `type: 'erc721_transfer'`
-                // so it routes through `handleTransfer` and triggers a SALE alert
-                // (because price > 0 and from/to are non-zero).
-                await eventQueue.add('nft_transfer', {
-                    eventId: sale.eventId,
-                    type: 'erc721_transfer',
-                    chain: sale.chain,
-                    contract: sale.contract,
-                    tokenId: sale.tokenId,
-                    txHash: sale.txHash,
-                    blockNumber: undefined,
-                    from: sale.seller,
-                    to: sale.buyer,
-                    // Hints for downstream code if/when it consumes them:
-                    priceNative: sale.priceNative,
-                    priceUsd: sale.priceUsd,
-                    currency: sale.currency,
-                    marketplace: sale.marketplace,
-                    timestamp: sale.timestamp,
-                }, {
-                    jobId: sale.eventId,                    // idempotent at the queue layer
-                    removeOnComplete: { age: 3600 },
-                    removeOnFail: { age: 86400 },
-                });
+            for (const sale of result.sales) {
+                // Reuse the existing transfer event shape so the worker + bot
+                // pipeline can ingest sales without changes. We tag as
+                // `erc721_transfer` so it routes through `handleTransfer` and
+                // triggers a SALE alert (price > 0, from/to non-zero).
+                await eventQueue.add(
+                    'nft_transfer',
+                    {
+                        eventId: sale.eventId,
+                        type: 'erc721_transfer',
+                        chain: sale.chain,
+                        contract: sale.contract,
+                        tokenId: sale.tokenId,
+                        txHash: sale.txHash,
+                        blockNumber: sale.blockNumber,
+                        from: sale.seller,
+                        to: sale.buyer,
+                        priceNative: sale.priceNative,
+                        priceUsd: sale.priceUsd,
+                        currency: sale.currency,
+                        marketplace: sale.marketplace,
+                        timestamp: sale.timestamp,
+                    },
+                    {
+                        jobId: sale.eventId,
+                        removeOnComplete: { age: 3600 },
+                        removeOnFail: { age: 86400 },
+                    },
+                );
             }
 
-            this.lastSeenByContract.set(key, maxTs + 1);
+            if (result.nextCursor) {
+                this.cursorByContract.set(key, result.nextCursor);
+            }
+
+            if (result.sales.length > 0) {
+                console.log(
+                    `[SalesIndexer] (${this.provider.name}) ${result.sales.length} sales for ${contract} -> queue (cursor=${result.nextCursor ?? 'unchanged'})`,
+                );
+            }
         }
     }
 }

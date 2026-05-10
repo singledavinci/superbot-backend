@@ -1,20 +1,13 @@
 import axios from 'axios';
+import {
+    FetchSalesArgs,
+    FetchSalesResult,
+    NormalizedSale,
+    SalesProvider,
+} from './SalesProvider';
 
-export interface NormalizedSale {
-    eventId: string;        // Stable idempotency key
-    chain: string;
-    contract: string;
-    tokenId?: string;
-    txHash: string;
-    timestamp: number;      // Unix seconds
-    buyer: string;
-    seller: string;
-    priceNative: number;
-    priceUsd?: number;
-    currency: string;
-    marketplace: string;
-    raw: unknown;           // Original provider payload for debugging
-}
+// Re-export so existing consumers keep working.
+export type { NormalizedSale } from './SalesProvider';
 
 interface ReservoirSalesResponse {
     sales: Array<{
@@ -49,12 +42,15 @@ type SupportedChain = keyof typeof RESERVOIR_BASE;
 /**
  * Reservoir-backed normalized NFT sales source.
  *
- * This client is intentionally minimal and read-only. It is gated behind
- * `RESERVOIR_API_KEY` and only emits real, provider-sourced events (no
- * synthetic/fake data). When no key is configured, callers should treat
- * the source as unavailable and fall back to on-chain indexing.
+ * Gated behind `RESERVOIR_API_KEY` and only emits real, provider-sourced
+ * events. When no key is configured the provider reports `isConfigured=false`
+ * and the SalesIndexer skips it.
+ *
+ * Cursor format: unix-seconds timestamp string. The indexer stores whatever
+ * `nextCursor` the provider returns and passes it back on the next tick.
  */
-export class ReservoirSalesClient {
+export class ReservoirSalesClient implements SalesProvider {
+    public readonly name = 'reservoir';
     private apiKey: string;
 
     constructor(apiKey?: string) {
@@ -71,26 +67,22 @@ export class ReservoirSalesClient {
         return true;
     }
 
-    /**
-     * Fetch normalized sales for a contract since a given unix timestamp.
-     * Caller is responsible for persisting `eventId` to dedupe across polls.
-     */
-    public async fetchSalesForContract(
-        contract: string,
-        opts: { chain?: SupportedChain; sinceUnix?: number; limit?: number } = {}
-    ): Promise<NormalizedSale[]> {
-        if (!this.isConfigured()) return [];
+    public async fetchSales(args: FetchSalesArgs): Promise<FetchSalesResult> {
+        if (!this.isConfigured()) return { sales: [] };
 
-        const chain = opts.chain || 'ethereum';
+        const chain = (args.chain || 'ethereum') as SupportedChain;
         const baseUrl = RESERVOIR_BASE[chain];
-        const limit = Math.min(opts.limit ?? 50, 1000);
+        if (!baseUrl) return { sales: [] };
+
+        const limit = Math.min(args.limit ?? 50, 1000);
+        const sinceUnix = args.cursor ? Number(args.cursor) : undefined;
 
         try {
             const response = await axios.get<ReservoirSalesResponse>(`${baseUrl}/sales/v6`, {
                 params: {
-                    contract,
+                    contract: args.contract,
                     limit,
-                    startTimestamp: opts.sinceUnix,
+                    startTimestamp: sinceUnix,
                     sortBy: 'time',
                     sortDirection: 'asc',
                 },
@@ -98,14 +90,21 @@ export class ReservoirSalesClient {
                 timeout: 15_000,
             });
 
-            const sales = response.data?.sales ?? [];
-            return sales
+            const items = response.data?.sales ?? [];
+            const sales = items
                 .map(s => this.normalize(s, chain))
                 .filter((s): s is NormalizedSale => s !== null);
+
+            const maxTs = sales.reduce((acc, s) => (s.timestamp > acc ? s.timestamp : acc), sinceUnix ?? 0);
+
+            return {
+                sales,
+                nextCursor: maxTs ? String(maxTs + 1) : args.cursor,
+            };
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
-            console.error(`[ReservoirSalesClient] sales/v6 failed for ${contract} (${chain}): ${message}`);
-            return [];
+            console.error(`[ReservoirSalesClient] sales/v6 failed for ${args.contract} (${chain}): ${message}`);
+            return { sales: [], nextCursor: args.cursor };
         }
     }
 
