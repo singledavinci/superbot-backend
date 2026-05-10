@@ -42,11 +42,19 @@ function discordGuildsEligibleForJwt(
 /** Guilds JWT may access — supports legacy tokens with only `guildId`. */
 function jwtEligibleDiscordGuilds(decoded: DashboardJwtPayload): string[] {
     if (Array.isArray(decoded.eligibleGuildIds) && decoded.eligibleGuildIds.length) {
-        const ids = decoded.eligibleGuildIds.filter((id): id is string => typeof id === 'string' && id.length > 0);
+        const ids = decoded.eligibleGuildIds.filter((id): id is string => typeof id === 'string' && id.trim().length > 0).map((id) => id.trim());
         return [...new Set(ids)];
     }
-    return typeof decoded.guildId === 'string' && decoded.guildId ? [decoded.guildId] : [];
+    const g = decoded.guildId;
+    return typeof g === 'string' && g.trim() ? [g.trim()] : [];
 }
+
+const GIT_SHA =
+    process.env.RAILWAY_GIT_COMMIT_SHA ||
+    process.env.RAILWAY_GIT_COMMIT ||
+    process.env.RAILWAY_GIT_SHA ||
+    process.env.SOURCE_COMMIT ||
+    'unknown';
 
 export class AdminAPI {
     private app = express();
@@ -61,18 +69,21 @@ export class AdminAPI {
     /** `:id` Discord guild snowflake on `/api/v1/guilds/:id/*`. */
     private guildRouteParam(req: express.Request, res: express.Response): string | null {
         const id = this.soloRouteParam(req, 'id');
-        if (!id) {
+        const trimmed = typeof id === 'string' ? id.trim() : '';
+        if (!trimmed) {
             res.status(400).json({ error: 'Invalid guild id' });
             return null;
         }
-        return id;
+        return trimmed;
     }
 
     /** Require Bearer JWT listing this Discord guild in `eligibleGuildIds` (or legacy single `guildId`). */
     private requireGuildAccess(req: express.Request, res: express.Response, discordGuildId: string): boolean {
         try {
+            const normalizedRoute = discordGuildId.trim();
             const authHeader = req.headers.authorization;
             if (!authHeader?.startsWith('Bearer ')) {
+                console.warn('[AuthMW] deny reason=no_bearer', { path: req.path, requested: normalizedRoute });
                 res.status(401).json({ error: 'Unauthorized' });
                 return false;
             }
@@ -80,12 +91,33 @@ export class AdminAPI {
             const secret = process.env.JWT_SECRET || 'super_secret_jwt_key';
             const decoded = jwt.verify(token, secret) as DashboardJwtPayload;
             const eligible = jwtEligibleDiscordGuilds(decoded);
-            if (!eligible.length || !eligible.includes(discordGuildId)) {
-                res.status(403).json({ error: 'Token guild does not match requested guild' });
+            const tokenGuild = typeof decoded.guildId === 'string' ? decoded.guildId.trim() : undefined;
+            if (!eligible.length) {
+                console.warn('[AuthMW] deny reason=no_eligible_in_token', {
+                    requested: normalizedRoute,
+                    tokenGuildId: tokenGuild ?? null,
+                    tokenEligibleGuildIds: [],
+                    discordUserId: decoded.id ?? null,
+                });
+                res.status(403).json({ error: 'Session has no allowed servers — sign out and sign in again.' });
+                return false;
+            }
+            if (!eligible.includes(normalizedRoute)) {
+                console.warn('[AuthMW] deny reason=guild_not_in_eligible_list', {
+                    requested: normalizedRoute,
+                    tokenGuildId: tokenGuild ?? null,
+                    tokenEligibleGuildIds: eligible,
+                    discordUserId: decoded.id ?? null,
+                });
+                res.status(403).json({
+                    error:
+                        'You do not have dashboard access for this Discord server ID. Pick your server from the header dropdown or ensure the bot was added (Guild row synced) and try again.',
+                });
                 return false;
             }
             return true;
         } catch {
+            console.warn('[AuthMW] deny reason=invalid_jwt', { path: req.path, requested: discordGuildId.trim() });
             res.status(401).json({ error: 'Invalid token' });
             return false;
         }
@@ -96,7 +128,13 @@ export class AdminAPI {
             console.log(`[API] ${req.method} ${req.url}`);
             next();
         });
-        this.app.use(cors());
+        this.app.use(
+            cors({
+                origin: true,
+                methods: ['GET', 'HEAD', 'PUT', 'PATCH', 'POST', 'DELETE', 'OPTIONS'],
+                allowedHeaders: ['Content-Type', 'Authorization'],
+            }),
+        );
         this.app.use(helmet());
         this.app.use(express.json());
 
@@ -107,6 +145,10 @@ export class AdminAPI {
         // 1. Basic Health Check
         this.app.get('/api/health', (req, res) => {
             res.json({ status: 'ok', service: 'superbot-api' });
+        });
+
+        this.app.get('/api/version', (_req, res) => {
+            res.json({ gitSha: GIT_SHA, node: process.version, service: 'superbot-backend' });
         });
 
         // 2. Discord OAuth Login Redirect
@@ -172,6 +214,10 @@ export class AdminAPI {
                         ? preferredDiscordId
                         : eligibleGuildIds[0];
 
+                console.log(
+                    `[Auth] Pre-sign JWT user=${userResponse.data.username} discordUserId=${userResponse.data.id} primaryGuildId=${primaryGuildId} eligibleGuildIds=[${eligibleGuildIds.join(', ')}]`,
+                );
+
                 // 4. Issue JWT (never omit guild scope — avoids blank dashboard after middleware tightened)
                 const jwtToken = jwt.sign(
                     {
@@ -184,7 +230,7 @@ export class AdminAPI {
                     { expiresIn: '1d' },
                 );
 
-                console.log(`[Auth] User ${userResponse.data.username} logged in. Guilds: ${eligibleGuildIds.join(', ')}`);
+                console.log(`[Auth] Issued JWT for ${userResponse.data.username} eligibleGuildIds count=${eligibleGuildIds.length}`);
 
                 res.redirect(`${dashboardBase}?token=${jwtToken}`);
             } catch (error) {
@@ -207,8 +253,9 @@ export class AdminAPI {
                 if (!eligible.length) {
                     return res.status(401).json({ error: 'Token missing guild scope; sign in again.' });
                 }
-                const guildId =
-                    decoded.guildId && eligible.includes(decoded.guildId) ? decoded.guildId : eligible[0];
+                const rawG = decoded.guildId;
+                const trimmedG = typeof rawG === 'string' ? rawG.trim() : undefined;
+                const guildId = trimmedG && eligible.includes(trimmedG) ? trimmedG : eligible[0];
                 res.json({
                     guildId,
                     eligibleGuildIds: eligible,
@@ -216,6 +263,33 @@ export class AdminAPI {
                     username: decoded.username,
                 });
             } catch (error) {
+                res.status(401).json({ error: 'Invalid token' });
+            }
+        });
+
+        /** Optional JWT claims inspector (enable with DEBUG_AUTH=true on the API). */
+        this.app.get('/api/v1/auth/me-debug', async (req, res) => {
+            if (!['1', 'true', 'yes'].includes(String(process.env.DEBUG_AUTH ?? '').toLowerCase())) {
+                return res.status(404).json({ error: 'Not found' });
+            }
+            try {
+                const authHeader = req.headers.authorization;
+                if (!authHeader?.startsWith('Bearer ')) return res.status(401).json({ error: 'No token' });
+                const token = authHeader.slice('Bearer '.length).trim();
+                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super_secret_jwt_key') as DashboardJwtPayload & {
+                    exp?: number;
+                    iat?: number;
+                };
+                res.json({
+                    discordUserId: decoded.id ?? null,
+                    username: decoded.username ?? null,
+                    guildId: decoded.guildId ?? null,
+                    eligibleGuildIds: Array.isArray(decoded.eligibleGuildIds) ? decoded.eligibleGuildIds : [],
+                    exp: typeof decoded.exp === 'number' ? decoded.exp : null,
+                    iat: typeof decoded.iat === 'number' ? decoded.iat : null,
+                    gitSha: GIT_SHA,
+                });
+            } catch {
                 res.status(401).json({ error: 'Invalid token' });
             }
         });

@@ -42,6 +42,7 @@ export class SuperBot {
         await this.loadCommands();
 
         this.client.once('ready', async () => {
+            await this.ensureGuildRowsForConnectedServers();
             const prismaIds = (await prisma.guild.findMany({ select: { discordId: true } })).map(g => g.discordId);
             const cacheIds = [...this.client.guilds.cache.keys()];
             const guildIds = [...new Set([...prismaIds, ...cacheIds])];
@@ -51,6 +52,7 @@ export class SuperBot {
 
         this.client.on('guildCreate', async guild => {
             console.log(`➕ Joined guild ${guild.id}; registering slash commands`);
+            await this.upsertGuildRow(guild.id, guild.name);
             await this.syncSlashCommandsToGuilds([guild.id]);
         });
 
@@ -60,6 +62,28 @@ export class SuperBot {
         console.log(`🤖 Bot logged in as ${this.client.user?.tag}`);
 
         this.startDeliveryDispatcher();
+    }
+
+    /** Ensures OAuth dashboard can intersect `@me/guilds` with Postgres even before `/setup` runs. */
+    private async upsertGuildRow(discordId: string, name: string | null) {
+        const label = (name && name.trim()) || 'Discord Server';
+        try {
+            await prisma.guild.upsert({
+                where: { discordId },
+                create: { discordId, name: label, planTier: 'FREE' },
+                update: { name: label },
+            });
+        } catch (err) {
+            console.warn(`[Bot] Guild upsert failed for ${discordId}:`, err);
+        }
+    }
+
+    private async ensureGuildRowsForConnectedServers() {
+        const tasks = [...this.client.guilds.cache.values()].map((g) => this.upsertGuildRow(g.id, g.name));
+        await Promise.all(tasks);
+        if (tasks.length) {
+            console.log(`📇 Synced ${tasks.length} Guild row(s) from Discord`);
+        }
     }
 
     private async syncSlashCommandsToGuilds(guildIds: string[]) {
