@@ -64,6 +64,12 @@ export interface WhaleContextMetrics {
     listingSurgeSuspected?: boolean | null;
     /** Verified recent tracked sell-side activity count in window when available */
     recentTrackedSellsDistinctWallets?: number;
+
+    /** Coalesced multi-item wallet burst (wallet action batcher) */
+    batchItemCount?: number;
+    batchTxCount?: number;
+    /** Sum of ETH for priced legs in batch; mints often 0 */
+    batchTotalEth?: number | null;
 }
 
 export function explainWhale(m: WhaleContextMetrics): ContextualExplanation {
@@ -102,7 +108,9 @@ export function explainWhale(m: WhaleContextMetrics): ContextualExplanation {
     if (!hasFloorEvidence) limitations.push(`${INSUFF} for floor trend vs prior snapshot.`);
 
     if (m.behavior === 'buy') {
-        const clustered = m.distinctWalletsInWindow >= 2 || m.eventsInWindow >= 2;
+        const batchWide = (m.batchItemCount ?? 1) >= 2;
+        const clustered =
+            batchWide || m.distinctWalletsInWindow >= 2 || m.eventsInWindow >= 2;
         let signal: ContextualSignalLabel = 'Insufficient data';
         if (clustered && m.focalWalletTracked && floorTrendUp === true && m.listingSurgeSuspected !== true)
             signal = 'Strong bullish signal';
@@ -114,11 +122,34 @@ export function explainWhale(m: WhaleContextMetrics): ContextualExplanation {
         if (floorTrendDown === true && signal === 'Strong bullish signal') signal = 'Weak bullish signal';
 
         const evidenceRaw: string[] = [];
+        if (
+            typeof m.batchItemCount === 'number' &&
+            m.batchItemCount > 1 &&
+            typeof m.batchTxCount === 'number'
+        ) {
+            evidenceRaw.push(`Batched: ${m.batchItemCount} items across ${m.batchTxCount} tx.`);
+        }
         evidenceRaw.push(
             `Tracked activity on this contract in ~${m.windowMinutes} min: distinct wallets=${m.distinctWalletsInWindow}, sampled events=${m.eventsInWindow}.`,
         );
+        if (
+            typeof m.batchTotalEth === 'number' &&
+            m.batchTotalEth > 0 &&
+            typeof m.batchItemCount === 'number' &&
+            m.batchItemCount > 1
+        ) {
+            evidenceRaw.push(
+                `Aggregate spend about ${m.batchTotalEth.toFixed(4)} ${m.currency || 'ETH'} across ${m.batchItemCount} items.`,
+            );
+        }
         if (typeof m.priceEth === 'number' && m.priceEth > 0) {
-            evidenceRaw.push(`Paid about ${m.priceEth.toFixed(4)} ${m.currency || 'ETH'}.`);
+            if ((m.batchItemCount ?? 1) > 1) {
+                evidenceRaw.push(
+                    `Representative avg ${m.currency || 'ETH'} per priced leg ≈ ${m.priceEth.toFixed(4)}.`,
+                );
+            } else {
+                evidenceRaw.push(`Paid about ${m.priceEth.toFixed(4)} ${m.currency || 'ETH'}.`);
+            }
         }
         if (hasFloorEvidence) {
             evidenceRaw.push(
@@ -166,8 +197,31 @@ export function explainWhale(m: WhaleContextMetrics): ContextualExplanation {
                 ? `${m.recentTrackedSellsDistinctWallets}`
                 : null;
         const evidenceRaw: string[] = [];
+        if (
+            typeof m.batchItemCount === 'number' &&
+            m.batchItemCount > 1 &&
+            typeof m.batchTxCount === 'number'
+        ) {
+            evidenceRaw.push(`Batched: ${m.batchItemCount} items across ${m.batchTxCount} tx.`);
+        }
+        if (
+            typeof m.batchTotalEth === 'number' &&
+            m.batchTotalEth > 0 &&
+            typeof m.batchItemCount === 'number' &&
+            m.batchItemCount > 1
+        ) {
+            evidenceRaw.push(
+                `Aggregate sale volume about ${m.batchTotalEth.toFixed(4)} ${m.currency || 'ETH'} across ${m.batchItemCount} items.`,
+            );
+        }
         if (typeof m.priceEth === 'number' && m.priceEth > 0) {
-            evidenceRaw.push(`Printed price near ${m.priceEth.toFixed(4)} ${m.currency || 'ETH'}.`);
+            if ((m.batchItemCount ?? 1) > 1) {
+                evidenceRaw.push(
+                    `Printed avg near ${m.priceEth.toFixed(4)} ${m.currency || 'ETH'} (priced legs only).`,
+                );
+            } else {
+                evidenceRaw.push(`Printed price near ${m.priceEth.toFixed(4)} ${m.currency || 'ETH'}.`);
+            }
         }
         evidenceRaw.push(
             sellDistinct !== null
@@ -203,6 +257,12 @@ export function explainWhale(m: WhaleContextMetrics): ContextualExplanation {
     let signal: ContextualSignalLabel =
         m.distinctWalletsInWindow >= 2 ? 'Strong bullish signal' : 'Neutral activity';
 
+    if ((m.batchItemCount ?? 1) >= 10 && m.distinctWalletsInWindow <= 2) {
+        signal = 'Strong bullish signal';
+    } else if ((m.batchItemCount ?? 1) >= 5 && signal === 'Neutral activity') {
+        signal = 'Weak bullish signal';
+    }
+
     const missingLiquiditySignals =
         !(typeof m.floorEth === 'number' && m.floorEth > 0) || m.floorVsSnapshotPct === null;
     if (missingLiquiditySignals) {
@@ -210,9 +270,17 @@ export function explainWhale(m: WhaleContextMetrics): ContextualExplanation {
         if (signal === 'Strong bullish signal') signal = 'High-risk momentum';
     }
 
-    const evidenceRaw: string[] = [
+    const evidenceRaw: string[] = [];
+    if (
+        typeof m.batchItemCount === 'number' &&
+        m.batchItemCount > 1 &&
+        typeof m.batchTxCount === 'number'
+    ) {
+        evidenceRaw.push(`Batched: ${m.batchItemCount} items across ${m.batchTxCount} tx.`);
+    }
+    evidenceRaw.push(
         `Tracked mint-interest windows show ${m.distinctWalletsInWindow} distinct wallets (${m.eventsInWindow} events) inside ~${m.windowMinutes} min.`,
-    ];
+    );
     if (typeof m.floorEth === 'number' && m.floorEth > 0) {
         evidenceRaw.push(`Reference floor snapshot: ~${m.floorEth.toFixed(4)} ETH.`);
     }

@@ -1,4 +1,4 @@
-import { EmbedBuilder } from 'discord.js';
+import { EmbedBuilder, type ColorResolvable } from 'discord.js';
 import type { IntelligenceReport, ContextualExplanation } from '@superbot/types';
 import {
     formatFallbackCollectionName,
@@ -95,6 +95,181 @@ function nftTitle(
 
 function contractForLookup(nftMeta: NFTMetadata | null | undefined, contract: string): string {
     return (nftMeta?.contract || contract || '').trim();
+}
+
+/** Human-readable span between two ms epochs (Discord copy). */
+function humanizeWindowMs(ms: number): string {
+    if (!(ms >= 0) || Number.isNaN(ms)) return '—';
+    if (ms < 1000) return '<1s';
+    const s = Math.floor(ms / 1000);
+    if (s < 60) return `${s}s`;
+    const m = Math.floor(s / 60);
+    const r = s % 60;
+    return r === 0 ? `${m} minute${m === 1 ? '' : 's'}` : `${m}m ${r}s`;
+}
+
+export function createWalletActionBatchEmbed(data: {
+    contract: string;
+    chain: string;
+    collectionName: string;
+    wallet: string;
+    batchBehavior: 'buy' | 'sale' | 'mint';
+    intelligence?: IntelligenceReport;
+    walletProfile?: WalletProfile | null;
+    nftMeta?: NFTMetadata | null;
+    label?: string | null;
+    batch: {
+        itemCount: number;
+        totalNative: number;
+        currency: string;
+        txHashes: string[];
+        blockRange: { first: number; last: number };
+        firstSeenAt: number;
+        lastSeenAt: number;
+        sampleTokenIds: string[];
+        sampleNftNames: string[];
+        marketplace?: string;
+        possibleWashTrading?: boolean;
+    };
+}) {
+    const who = walletDisplay(data.walletProfile, data.wallet);
+    const coll = data.collectionName || shortAddr(data.contract);
+    let titleLead = '🚨 Batch Buy';
+    let color: ColorResolvable = getGradeColor(data.intelligence?.grade);
+    if (data.batchBehavior === 'sale') {
+        titleLead = '🔻 Batch Sale';
+        color = 0xff4444;
+    } else if (data.batchBehavior === 'mint') {
+        titleLead = '🎨 Batch Mint';
+        color = 0x00ffee;
+    }
+    const title = `${titleLead} — ${who} ${data.batchBehavior === 'sale' ? 'sold' : data.batchBehavior === 'mint' ? 'minted' : 'bought'} ${data.batch.itemCount} × ${coll}`;
+
+    const txCount = data.batch.txHashes.length;
+    const windowMs = Math.max(0, data.batch.lastSeenAt - data.batch.firstSeenAt);
+    let descPieces: string[] = [
+        `Across **${txCount}** tx(s) over **${humanizeWindowMs(windowMs)}**.`,
+    ];
+    const showSpend =
+        (data.batchBehavior === 'buy' || data.batchBehavior === 'sale') &&
+        data.batch.totalNative > 0;
+    if (showSpend) {
+        descPieces.push(`Total **${data.batch.totalNative.toFixed(4)} ${data.batch.currency || 'ETH'}**.`);
+    }
+    if (data.batchBehavior === 'mint' && data.batch.totalNative <= 0) {
+        descPieces = [`Across **${txCount}** tx(s) over **${humanizeWindowMs(windowMs)}**.`];
+    }
+
+    const embed = new EmbedBuilder().setColor(color).setTitle(title);
+
+    const thumb =
+        normalizeImageUrl(data.nftMeta?.thumbnailUrl ?? data.nftMeta?.imageUrl) ?? null;
+    if (thumb) embed.setThumbnail(thumb);
+
+    if (data.walletProfile) {
+        const author = walletDisplay(data.walletProfile, data.wallet);
+        embed.setAuthor({
+            name: data.label ? `${data.label} · ${author}` : author,
+            url: data.walletProfile.openseaUrl,
+        });
+    } else if (data.label) {
+        embed.setAuthor({ name: data.label });
+    }
+
+    embed.setDescription(
+        `**Signal:** \`${data.intelligence?.grade || 'Neutral'}\` · ` + descPieces.join(' '),
+    );
+
+    embed.addFields(
+        { name: 'Item count', value: String(data.batch.itemCount), inline: true },
+        {
+            name: 'Wallet',
+            value: data.walletProfile?.openseaUrl
+                ? `[${walletDisplay(data.walletProfile, data.wallet)}](${data.walletProfile.openseaUrl})`
+                : `\`${shortAddr(data.wallet)}\``,
+            inline: true,
+        },
+    );
+
+    if (showSpend) {
+        embed.addFields({
+            name: data.batchBehavior === 'sale' ? 'Total volume' : 'Total spend',
+            value: `${data.batch.totalNative.toFixed(4)} ${data.batch.currency || 'ETH'}`,
+            inline: true,
+        });
+    }
+
+    const { first, last } = data.batch.blockRange;
+    if (first > 0 && last > 0) {
+        embed.addFields({
+            name: 'Block range',
+            value: first === last ? `${first}` : `${first} → ${last}`,
+            inline: true,
+        });
+    }
+
+    if (data.batch.marketplace) {
+        embed.addFields({ name: 'Marketplace', value: data.batch.marketplace, inline: true });
+    }
+
+    const sampleLines: string[] = [];
+    const n = Math.min(5, data.batch.sampleTokenIds.length);
+    for (let i = 0; i < n; i++) {
+        const tid = data.batch.sampleTokenIds[i];
+        const nm = data.batch.sampleNftNames[i];
+        const label = nm && nm.trim() ? nm : `#${tid}`;
+        sampleLines.push(`• [${label}](${links.opensea.nft(data.contract, tid)})`);
+    }
+    if (sampleLines.length > 0) {
+        embed.addFields({ name: 'Sample token IDs', value: sampleLines.join('\n').slice(0, 1024), inline: false });
+    }
+
+    if (data.walletProfile?.holdingsCount !== null && data.walletProfile?.holdingsCount !== undefined) {
+        embed.addFields({
+            name: 'Wallet holdings',
+            value: `${data.walletProfile.holdingsCount} NFTs`,
+            inline: true,
+        });
+    }
+
+    if (data.walletProfile?.topCollectionsByCount && data.walletProfile.topCollectionsByCount.length > 0) {
+        embed.addFields({
+            name: 'Wallet portfolio (top 3)',
+            value: data.walletProfile.topCollectionsByCount
+                .map(c => `• ${c.name} ×${c.count}`)
+                .join('\n'),
+            inline: false,
+        });
+    }
+
+    embed.addFields({
+        name: '🧠 AI Context Engine',
+        value: `*${data.intelligence?.context || 'No context available.'}*`,
+    });
+
+    if (data.intelligence?.risk) {
+        embed.addFields({ name: '⚠️ Risk', value: `*${data.intelligence.risk}*` });
+    }
+
+    if (data.batch.possibleWashTrading) {
+        embed.addFields({
+            name: '⚠ Possible wash',
+            value:
+                '*At least one leg showed buyer/seller NFT movement in the last 30 days (best-effort graph). Not a verdict — verify on-chain.*',
+        });
+    }
+
+    const linkParts: string[] = [];
+    const firstTx = data.batch.txHashes.find(h => /^0x[a-fA-F0-9]{64}$/.test(h));
+    if (firstTx) linkParts.push(`[First tx](${links.etherscan.tx(firstTx)})`);
+    linkParts.push(markdownCollectionToolkit(data.contract, data.nftMeta?.collectionSlug ?? null));
+    if (linkParts.length) embed.addFields({ name: 'Links', value: linkParts.join(' · '), inline: false });
+
+    return embed
+        .setTimestamp()
+        .setFooter({
+            text: 'SuperBot Intelligence • Not financial advice. Signals are informational and may be incomplete or delayed.',
+        });
 }
 
 export function createWhaleBuyEmbed(data: {

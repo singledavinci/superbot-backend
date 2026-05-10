@@ -14,6 +14,9 @@ import { Queue } from 'bullmq';
 export const eventQueue = new Queue('blockchain_events', { connection: redisConnection });
 export const discordQueue = new Queue('discord_delivery', { connection: redisConnection });
 
+/** Delayed coalescence flushes for per-wallet NFT collection bursts. */
+export const walletActionBatchQueue = new Queue('wallet_action_batch', { connection: redisConnection });
+
 /** Delayed floor before/after checks for mass listing / mass delist alerts. */
 export const floorImpactQueue = new Queue('floor_impact', { connection: redisConnection });
 

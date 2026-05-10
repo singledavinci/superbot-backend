@@ -16,3 +16,4 @@ export * from './NftNameResolver';
 export * from './WalletProfile';
 export * from './rpcUrls';
 export * from './RpcPool';
+export * from './WalletActionBatcher';

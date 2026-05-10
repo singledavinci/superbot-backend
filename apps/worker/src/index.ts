@@ -1,5 +1,9 @@
 import { Worker, Job } from 'bullmq';
-import { redisConnection, discordQueue as discordDeliveryQueue } from '@superbot/queue';
+import {
+    redisConnection,
+    discordQueue as discordDeliveryQueue,
+    walletActionBatchQueue,
+} from '@superbot/queue';
 import { prisma } from '@superbot/database';
 import {
     clickhouse,
@@ -22,6 +26,12 @@ import {
     type NFTMetadata,
     type WalletProfile,
     type HotMintDetection,
+    WalletActionBatcher,
+    buildWalletActionBatchBase,
+    deterministicWalletBatchEventId,
+    mapEngineBehaviorToBatchKey,
+    parseStoredWhaleBatchEvents,
+    type WhaleActionBatchStoredEvent,
 } from '@superbot/analytics';
 import { SniperEngine } from '@superbot/utils';
 import {
@@ -39,6 +49,32 @@ import type { JsonRpcProvider } from 'ethers';
 import type { IntelligenceReport } from '@superbot/types';
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+
+function readWalletBatchEnabled(): boolean {
+    return process.env.WALLET_BATCH_ENABLED !== 'false';
+}
+
+function readWalletBatchFlushMs(): number {
+    const n = Number(process.env.WALLET_BATCH_FLUSH_MS);
+    if (!(n >= 0) || Number.isNaN(n)) return 90_000;
+    return Math.floor(n);
+}
+
+function readWalletBatchMaxItems(): number {
+    const n = Number(process.env.WALLET_BATCH_MAX_ITEMS);
+    if (!(n >= 2) || Number.isNaN(n)) return 100;
+    return Math.floor(n);
+}
+
+function batchEmbedBehaviorFromAlertType(t: string | undefined): 'buy' | 'sale' | 'mint' {
+    if (t === 'WHALE_SALE') return 'sale';
+    if (t === 'WHALE_MINT') return 'mint';
+    return 'buy';
+}
+
+function walletBatchRoutingActive(): boolean {
+    return readWalletBatchEnabled() && readWalletBatchFlushMs() > 0;
+}
 
 function shortEthAddr(addr: string): string {
     if (!addr) return '—';
@@ -67,6 +103,7 @@ export class EventWorker {
     private rpcPool: RpcPool | null = null;
     private collectionNames!: CollectionNameResolver;
     private nftNames!: NftNameResolver;
+    private whaleActionBatcher!: WalletActionBatcher;
 
     /** Sliding window for correlated tracked-wallet intel (default 60 minutes). */
     private INTEL_WINDOW_MS =
@@ -106,6 +143,17 @@ export class EventWorker {
             rpcPool:
                 this.rpcPool && this.rpcPool.httpsUrls.length > 0 ? this.rpcPool : null,
         });
+
+        this.whaleActionBatcher = new WalletActionBatcher(
+            redisConnection,
+            walletActionBatchQueue,
+            {
+                enabled: readWalletBatchEnabled(),
+                flushMs: readWalletBatchFlushMs(),
+                maxItems: readWalletBatchMaxItems(),
+                onFlushBatch: batchBase => this.flushWalletActionBatch(batchBase),
+            },
+        );
 
         console.log('[Worker] HotMintDetector initialized (Ethereum, tracked collections).');
     }
@@ -147,6 +195,181 @@ export class EventWorker {
         );
         floorWorker.on('failed', (job, err) => {
             console.error(`❌ floor_impact job ${job?.id} failed:`, err);
+        });
+
+        const walletBatchFlushWorker = new Worker(
+            'wallet_action_batch',
+            async (job: Job) => {
+                if (job.name === 'wallet_action_batch_flush') {
+                    await this.flushWalletActionBatch(String(job.data?.batchBase ?? ''));
+                }
+            },
+            { connection: redisConnection, concurrency: 4 },
+        );
+        walletBatchFlushWorker.on('failed', (job, err) => {
+            console.error(`❌ wallet_action_batch job ${job?.id} failed:`, err);
+        });
+    }
+
+    private mergeWhaleBatchMetrics(items: WhaleActionBatchStoredEvent[]): WhaleContextMetrics {
+        const first = items[0];
+        const base = JSON.parse(JSON.stringify(first.whaleMetricsJson)) as WhaleContextMetrics;
+        const txs = new Set(items.map(i => String(i.txHash || '')));
+        txs.delete('');
+        const total = items.reduce((s, i) => s + (Number.isFinite(i.priceNative) && i.priceNative > 0 ? i.priceNative : 0), 0);
+        const pricedN = items.filter(i => i.priceNative > 0).length;
+        base.batchItemCount = items.length;
+        base.batchTxCount = txs.size;
+        base.batchTotalEth = total > 0 ? total : null;
+        base.priceEth = pricedN > 0 ? total / pricedN : null;
+        if (items.some(i => Boolean(i.discordPayload.possibleWashTrading))) {
+            base.possibleWashTrading = true;
+        }
+        const mkts = items
+            .map(i => String(i.discordPayload.marketplace ?? i.marketplace ?? '').trim())
+            .filter(Boolean);
+        if (mkts.length > 0 && mkts.every(m => m === mkts[0])) {
+            base.marketplace = mkts[0];
+        }
+        return base;
+    }
+
+    private async flushWalletActionBatch(batchBase: string): Promise<void> {
+        if (!batchBase) return;
+        const rawRows = await this.whaleActionBatcher.drain(batchBase);
+        const items = parseStoredWhaleBatchEvents(rawRows as unknown);
+
+        console.log(`[Batcher] flushed ${batchBase} with ${items.length} events`);
+
+        if (items.length === 0) return;
+
+        if (items.length === 1) {
+            const solo = items[0].discordPayload;
+            const trackedId = typeof solo.trackedWalletDbId === 'string' ? solo.trackedWalletDbId : '';
+            const evid = solo.eventId ?? solo.txHash;
+            const cid = solo.channelId;
+            if (!evid || typeof cid !== 'string') return;
+            const jobSuffix = trackedId ? trackedId : 'nowallet';
+            await discordDeliveryQueue.add(
+                'discord_alert',
+                solo as Record<string, unknown>,
+                { jobId: `alert-${jobSuffix}-${evid}-${cid}` },
+            );
+            return;
+        }
+
+        const first = items[0].discordPayload;
+        const merged = this.mergeWhaleBatchMetrics(items);
+        const cxWhale = explainWhale(merged);
+        const channelId = typeof first.channelId === 'string' ? first.channelId : '';
+        if (!channelId) return;
+
+        const focalWalletLc = items[0].focalWalletLc;
+        const chainLcPayload = String(first.chain || 'ethereum').toLowerCase();
+        const contractStr = typeof first.contract === 'string' ? first.contract : '';
+        const contractLcPayload = contractStr.toLowerCase();
+
+        const firstSeenAt = Math.min(...items.map(i => i.firstSeenAtCandidate));
+        const lastSeenAt = Math.max(...items.map(i => i.enqueuedAtMs));
+
+        const behaviorEmbed = batchEmbedBehaviorFromAlertType(
+            typeof first.alertType === 'string' ? first.alertType : undefined,
+        );
+        const behaviorForId =
+            behaviorEmbed === 'sale' ? 'sale' : behaviorEmbed === 'mint' ? 'mint' : ('buy' as const);
+
+        const batchEventId = deterministicWalletBatchEventId({
+            chainLc: chainLcPayload,
+            contractLc: contractLcPayload || contractStr,
+            walletLc: focalWalletLc,
+            behavior: behaviorForId,
+            firstSeenAtMs: firstSeenAt,
+        });
+
+        const jobCacheKeyBatch = `${batchEventId}:${channelId}`;
+        const nar = await summarizeFactsWithOptionalAi({
+            explanation: cxWhale,
+            jobCacheKey: jobCacheKeyBatch,
+        });
+        const intelligence: IntelligenceReport = contextualToIntelligenceReport(cxWhale, nar);
+
+        const txHashesOrdered: string[] = [];
+        const seenTx = new Set<string>();
+        for (const row of items) {
+            const h = String(row.txHash || '');
+            if (!/^0x[a-fA-F0-9]{64}$/.test(h) || seenTx.has(h)) continue;
+            seenTx.add(h);
+            txHashesOrdered.push(h);
+        }
+
+        const blocks = items
+            .map(i => i.blockNumber)
+            .filter((b): b is number => typeof b === 'number' && b > 0);
+        const blockRange =
+            blocks.length > 0
+                ? { first: Math.min(...blocks), last: Math.max(...blocks) }
+                : { first: 0, last: 0 };
+
+        const sampleTokenIds: string[] = [];
+        const sampleNftNames: string[] = [];
+        const tokSeen = new Set<string>();
+        for (const row of items) {
+            const tid = String(row.tokenId);
+            if (!tid || tokSeen.has(tid)) continue;
+            tokSeen.add(tid);
+            sampleTokenIds.push(tid);
+            const nmRaw = row.discordPayload.nftName;
+            const nm = typeof nmRaw === 'string' && nmRaw.trim() ? nmRaw.trim() : '';
+            sampleNftNames.push(nm || `#${tid}`);
+            if (sampleTokenIds.length >= 5) break;
+        }
+
+        const mktsFlush = items
+            .map(i => String(i.discordPayload.marketplace ?? i.marketplace ?? '').trim())
+            .filter(Boolean);
+        const uniformMarket =
+            mktsFlush.length > 0 && mktsFlush.every(m => m === mktsFlush[0]) ? mktsFlush[0] : undefined;
+
+        const totalNative = items.reduce(
+            (s, i) => s + (Number.isFinite(i.priceNative) ? i.priceNative : 0),
+            0,
+        );
+        const currency =
+            typeof first.currency === 'string' && first.currency.trim()
+                ? first.currency.trim()
+                : 'ETH';
+
+        const batchPayload = {
+            eventId: batchEventId,
+            channelId,
+            alertType: 'WALLET_ACTION_BATCH',
+            chain: chainLcPayload,
+            contract: contractStr,
+            collectionName: typeof first.collectionName === 'string' ? first.collectionName : '',
+            wallet: typeof first.wallet === 'string' ? first.wallet : focalWalletLc,
+            label: first.label ?? null,
+            walletProfile: first.walletProfile ?? null,
+            nftMeta: first.nftMeta ?? null,
+            intelligence,
+            mentionRoleId: typeof first.mentionRoleId === 'string' ? first.mentionRoleId : null,
+            batchBehavior: behaviorEmbed,
+            batch: {
+                itemCount: items.length,
+                totalNative,
+                txHashes: txHashesOrdered,
+                blockRange,
+                firstSeenAt,
+                lastSeenAt,
+                sampleTokenIds,
+                sampleNftNames,
+                marketplace: uniformMarket,
+                currency,
+                possibleWashTrading: items.some(i => Boolean(i.discordPayload.possibleWashTrading)),
+            },
+        };
+
+        await discordDeliveryQueue.add('discord_alert', batchPayload, {
+            jobId: `wallet-action-batch:${batchEventId}:${channelId}`,
         });
     }
 
@@ -653,38 +876,81 @@ export class EventWorker {
                     { collectionName: whaleCollectionLabel },
                 );
 
-                await discordDeliveryQueue.add(
-                    'discord_alert',
-                    {
-                        eventId,
-                        channelId,
-                        alertType:
-                            eventType === 'SALE'
-                                ? 'WHALE_SALE'
-                                : eventType === 'MINT'
-                                  ? 'WHALE_MINT'
-                                  : 'WHALE_BUY',
-                        contract,
-                        collectionName: whaleCollectionLabel,
-                        nftName: whaleNftLabel,
-                        wallet: isSeller ? from : to,
-                        label: wallet.label,
-                        tokenId,
+                const whaleAlertType =
+                    eventType === 'SALE'
+                        ? 'WHALE_SALE'
+                        : eventType === 'MINT'
+                          ? 'WHALE_MINT'
+                          : 'WHALE_BUY';
+
+                const whaleDiscordPayload: Record<string, unknown> = {
+                    eventId,
+                    channelId,
+                    alertType: whaleAlertType,
+                    contract,
+                    collectionName: whaleCollectionLabel,
+                    nftName: whaleNftLabel,
+                    wallet: isSeller ? from : to,
+                    label: wallet.label,
+                    trackedWalletDbId: wallet.id,
+                    chain: chainLc,
+                    tokenId,
+                    txHash,
+                    price,
+                    currency,
+                    marketplace,
+                    intelligence,
+                    mentionRoleId: wallet.mentionRoleId,
+                    possibleWashTrading: possibleWashTrading || undefined,
+                    nftMeta,
+                    walletProfile: focusProfile,
+                    counterpartyProfile,
+                };
+
+                const soloJobOpts = {
+                    jobId: `alert-${wallet.id}-${eventId}-${channelId}`,
+                };
+
+                if (walletBatchRoutingActive()) {
+                    const stored: WhaleActionBatchStoredEvent = {
+                        version: 1,
+                        discordPayload:
+                            whaleDiscordPayload as WhaleActionBatchStoredEvent['discordPayload'],
+                        whaleMetricsJson: JSON.parse(JSON.stringify(whaleMetrics)) as Record<
+                            string,
+                            unknown
+                        >,
+                        focalWalletLc: focalForMember,
+                        firstSeenAtCandidate: tsMillis,
+                        enqueuedAtMs: Date.now(),
+                        priceNative: effectivePriceEth,
+                        blockNumber: jobBlock ?? undefined,
                         txHash,
-                        price,
-                        currency,
+                        tokenId,
                         marketplace,
-                        intelligence,
-                        mentionRoleId: wallet.mentionRoleId,
-                        possibleWashTrading: possibleWashTrading || undefined,
-                        nftMeta,
-                        walletProfile: focusProfile,
-                        counterpartyProfile,
-                    },
-                    {
-                        jobId: `alert-${wallet.id}-${eventId}-${channelId}`,
-                    },
-                );
+                    };
+                    const batchBase = buildWalletActionBatchBase({
+                        chainLc,
+                        contractLc: contractLcEff,
+                        guildDbId: wallet.guildId,
+                        walletLc: focalForMember,
+                        behavior: mapEngineBehaviorToBatchKey(behavior),
+                    });
+                    const enqueueResult = await this.whaleActionBatcher.enqueue(stored, batchBase);
+                    if (enqueueResult === 'immediate_fallback') {
+                        await discordDeliveryQueue.add(
+                            'discord_alert',
+                            whaleDiscordPayload,
+                            soloJobOpts,
+                        );
+                    }
+                } else {
+                    await discordDeliveryQueue.add(
+                        'discord_alert',
+                        whaleDiscordPayload,
+                        soloJobOpts,
+                    );
+                }
             }
         }
     }

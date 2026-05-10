@@ -17,6 +17,7 @@ import {
     createClusterBuyEmbed,
     createFloorImpactFollowupEmbed,
     createHotMintEmbed,
+    createWalletActionBatchEmbed,
 } from './embeds';
 import type { ContextualExplanation } from '@superbot/types';
 import { formatFallbackCollectionName } from '@superbot/analytics';
@@ -277,7 +278,66 @@ export class SuperBot {
                 content = `<@&${validatedRoleId}>`;
             }
 
-            if (alertType === 'WHALE_BUY' || alertType === 'WHALE_SALE' || alertType === 'WHALE_MINT') {
+            if (alertType === 'WALLET_ACTION_BATCH') {
+                const bb = String(data.batchBehavior || 'buy') as 'buy' | 'sale' | 'mint';
+                const b = data.batch || {};
+                const embed = createWalletActionBatchEmbed({
+                    contract: data.contract,
+                    chain: typeof data.chain === 'string' ? data.chain : 'ethereum',
+                    collectionName:
+                        typeof data.collectionName === 'string' ? data.collectionName : data.contract,
+                    wallet: typeof data.wallet === 'string' ? data.wallet : '',
+                    batchBehavior:
+                        bb === 'sale' || bb === 'mint' || bb === 'buy' ? bb : 'buy',
+                    label: data.label ?? null,
+                    intelligence: data.intelligence,
+                    nftMeta: data.nftMeta ?? null,
+                    walletProfile: data.walletProfile ?? null,
+                    batch: {
+                        itemCount: Number(b.itemCount) || 0,
+                        totalNative: Number(b.totalNative) || 0,
+                        currency: typeof b.currency === 'string' ? b.currency : 'ETH',
+                        txHashes: Array.isArray(b.txHashes) ? b.txHashes.map(String) : [],
+                        blockRange:
+                            b.blockRange &&
+                            typeof b.blockRange.first === 'number' &&
+                            typeof b.blockRange.last === 'number'
+                                ? { first: b.blockRange.first, last: b.blockRange.last }
+                                : { first: 0, last: 0 },
+                        firstSeenAt: Number(b.firstSeenAt) || Date.now(),
+                        lastSeenAt: Number(b.lastSeenAt) || Date.now(),
+                        sampleTokenIds: Array.isArray(b.sampleTokenIds)
+                            ? b.sampleTokenIds.map(String)
+                            : [],
+                        sampleNftNames: Array.isArray(b.sampleNftNames)
+                            ? b.sampleNftNames.map(String)
+                            : [],
+                        marketplace: typeof b.marketplace === 'string' ? b.marketplace : undefined,
+                        possibleWashTrading: Boolean(b.possibleWashTrading),
+                    },
+                });
+                const firstTid =
+                    Array.isArray(b.sampleTokenIds) && b.sampleTokenIds.length > 0
+                        ? String(b.sampleTokenIds[0])
+                        : '0';
+                const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    ...nftMarketplaceButtons(data.contract, firstTid),
+                    new ButtonBuilder()
+                        .setCustomId(`stats_${data.wallet}`)
+                        .setLabel('View Wallet Stats')
+                        .setStyle(ButtonStyle.Secondary),
+                    new ButtonBuilder()
+                        .setCustomId(`mute_${data.wallet}`)
+                        .setLabel('Mute this Wallet')
+                        .setStyle(ButtonStyle.Danger),
+                );
+                await channel.send({
+                    content,
+                    embeds: [embed],
+                    components: [row],
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
+                });
+            } else if (alertType === 'WHALE_BUY' || alertType === 'WHALE_SALE' || alertType === 'WHALE_MINT') {
                 const embed = createWhaleBuyEmbed({
                     contract: data.contract,
                     collectionName:
