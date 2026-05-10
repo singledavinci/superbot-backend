@@ -4,3 +4,4 @@ export * from './FloorProvider';
 export * from './SalesProvider';
 export * from './ReservoirSales';
 export * from './AlchemySales';
+export * from './OpenSeaSales';

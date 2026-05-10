@@ -3,6 +3,7 @@ import { eventQueue } from '@superbot/queue';
 import { prisma } from '@superbot/database';
 import {
     AlchemySalesClient,
+    OpenSeaSalesClient,
     ReservoirSalesClient,
     SalesProvider,
 } from '@superbot/analytics';
@@ -10,17 +11,18 @@ import {
 dotenv.config();
 
 /**
- * SalesIndexer — polls a normalized sales source (Alchemy or Reservoir) for
- * every tracked collection and publishes each sale into the shared event
- * queue, where the existing worker + bot pipeline takes over and delivers
- * Discord alerts.
+ * SalesIndexer — polls a normalized sales source for every tracked collection
+ * and publishes each sale into the shared event queue, where the existing
+ * worker + bot pipeline takes over and delivers Discord alerts.
  *
- * Provider selection (first match wins):
- *   1. Alchemy NFT Sales API — if `ALCHEMY_API_KEY` (or a key extractable
- *      from `WSS_RPC_URL`) is configured. Preferred because the operator
- *      already needs an Alchemy key for the WSS RPC.
- *   2. Reservoir `sales/v6` — if `RESERVOIR_API_KEY` is configured.
- *   3. Disabled. The service stays alive so Railway does not crash-loop.
+ * Provider selection (first configured wins; explicit preference via
+ * `SALES_PROVIDER=opensea|reservoir|alchemy` overrides ordering):
+ *   1. OpenSea v2 — most accurate marketplace data, requires `OPENSEA_API_KEY`.
+ *   2. Reservoir — multi-marketplace aggregator, requires `RESERVOIR_API_KEY`.
+ *   3. Alchemy NFT Sales — only useful on paid tiers (free tier returns a
+ *      stale snapshot from 2024), requires `ALCHEMY_API_KEY`.
+ *   4. Disabled. The service stays alive so Railway does not crash-loop;
+ *      live sales still flow through the on-chain SaleDetector path.
  *
  * Idempotency: the provider's stable `eventId` is reused as the BullMQ jobId,
  * so duplicates seen across polling cycles are dropped at the queue layer.
@@ -33,23 +35,42 @@ export class SalesIndexer {
     private timer: NodeJS.Timeout | null = null;
 
     // Per (chain:contract) cursor, opaque to us — the provider chooses what to
-    // store (last block for Alchemy, last timestamp for Reservoir).
+    // store (last timestamp for OpenSea/Reservoir, last block for Alchemy).
     private cursorByContract = new Map<string, string>();
 
     constructor() {
-        const alchemy = new AlchemySalesClient();
+        this.provider = this.pickProvider();
+    }
+
+    private pickProvider(): SalesProvider | null {
+        const opensea = new OpenSeaSalesClient();
         const reservoir = new ReservoirSalesClient();
-        if (alchemy.isConfigured()) {
-            this.provider = alchemy;
-        } else if (reservoir.isConfigured()) {
-            this.provider = reservoir;
+        const alchemy = new AlchemySalesClient();
+
+        const explicit = (process.env.SALES_PROVIDER || '').trim().toLowerCase();
+        const byName: Record<string, SalesProvider> = {
+            opensea,
+            reservoir,
+            alchemy,
+        };
+        if (explicit && byName[explicit]) {
+            const chosen = byName[explicit];
+            if (chosen.isConfigured()) return chosen;
+            console.warn(
+                `[SalesIndexer] SALES_PROVIDER=${explicit} requested but not configured; falling back to auto-pick.`,
+            );
         }
+
+        if (opensea.isConfigured()) return opensea;
+        if (reservoir.isConfigured()) return reservoir;
+        if (alchemy.isConfigured()) return alchemy;
+        return null;
     }
 
     public async start() {
         if (!this.provider) {
             console.warn(
-                '[SalesIndexer] No sales provider configured (set ALCHEMY_API_KEY or RESERVOIR_API_KEY). Sales indexer is disabled.',
+                '[SalesIndexer] No sales provider configured (set OPENSEA_API_KEY, RESERVOIR_API_KEY, or ALCHEMY_API_KEY). Sales indexer is disabled — on-chain SaleDetector still delivers live sales.',
             );
             await new Promise(() => {});
             return;
