@@ -18,13 +18,13 @@ export class EventWorker {
     private SNIPING_ENABLED = false; // Hard-disabled for security per audit
 
     constructor() {
-        // Initialize providers for sniping/data fetching
-        this.providers.set('ethereum', new JsonRpcProvider(process.env.WSS_RPC_URL));
-        this.providers.set('polygon', new JsonRpcProvider(process.env.POLYGON_WSS_RPC_URL));
-        this.providers.set('base', new JsonRpcProvider(process.env.BASE_WSS_RPC_URL));
+        // Ethereum-only deployment. Re-add other chains here together with their
+        // *_WSS_RPC_URL env vars when expanding multi-chain support.
+        if (process.env.WSS_RPC_URL) {
+            this.providers.set('ethereum', new JsonRpcProvider(process.env.WSS_RPC_URL));
+        }
 
-        // Initialize sniper engines per chain (disabled by flag)
-        for (const [chain, provider] of this.providers) {
+        for (const [chain] of this.providers) {
             this.saleDetectors.set(chain, new SaleDetector(process.env[`${chain.toUpperCase()}_WSS_RPC_URL`] || ''));
         }
     }

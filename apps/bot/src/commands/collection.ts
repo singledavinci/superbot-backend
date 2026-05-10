@@ -39,7 +39,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 { name: '📦 Total Listed', value: '184 (1.8%)', inline: true },
                 { name: '⚡ Sales Velocity', value: '8 sales/hr', inline: true }
             )
-            .setFooter({ text: 'Data sourced from multi-chain indexer + Context Engine' })
+            .setFooter({ text: 'Data sourced from Ethereum indexer + Context Engine' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });

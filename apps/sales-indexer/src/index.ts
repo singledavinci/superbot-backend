@@ -46,12 +46,14 @@ export class SalesIndexer {
 
         if (collections.length === 0) return;
 
-        // De-duplicate by (chain, contract) since multiple guilds may track the same contract.
-        const unique = new Map<string, { contract: string; chain: string }>();
+        // Ethereum-only deployment: any collection rows on other chains are skipped
+        // until multi-chain support is re-enabled.
+        const unique = new Map<string, { contract: string; chain: 'ethereum' }>();
         for (const c of collections) {
             const chain = (c.chain || 'ethereum').toLowerCase();
+            if (chain !== 'ethereum') continue;
             const contract = c.contractAddress.toLowerCase();
-            unique.set(`${chain}:${contract}`, { contract, chain });
+            unique.set(`${chain}:${contract}`, { contract, chain: 'ethereum' });
         }
 
         for (const { contract, chain } of unique.values()) {
@@ -59,7 +61,7 @@ export class SalesIndexer {
             const sinceUnix = this.lastSeenByContract.get(key);
 
             const sales = await this.reservoir.fetchSalesForContract(contract, {
-                chain: chain as 'ethereum' | 'base' | 'polygon' | 'arbitrum' | 'optimism',
+                chain,
                 sinceUnix,
                 limit: 50,
             });

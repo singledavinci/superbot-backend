@@ -21,10 +21,10 @@ export class BlockchainIndexer {
     private reconnectAttempts: Map<string, number> = new Map();
     private CONFIRMATION_BLOCKS = Number(process.env.CONFIRMATION_BLOCKS) || 2;
     
+    // Ethereum-only deployment. To re-enable additional chains, add entries here
+    // and set the corresponding *_WSS_RPC_URL env vars.
     private supportedChains: ChainConfig[] = [
         { name: 'ethereum', rpcEnvKey: 'WSS_RPC_URL' },
-        { name: 'polygon', rpcEnvKey: 'POLYGON_WSS_RPC_URL' },
-        { name: 'base', rpcEnvKey: 'BASE_WSS_RPC_URL' }
     ];
 
     constructor() {
@@ -63,7 +63,7 @@ export class BlockchainIndexer {
     }
 
     public async start() {
-        console.log(`📡 Starting Multi-Chain Blockchain Indexer (${this.providers.size} chains active)...`);
+        console.log(`📡 Starting Blockchain Indexer (${this.providers.size} chain(s) active: ${[...this.providers.keys()].join(', ') || 'none'})...`);
         
         // 1. Initialize Sync State and perform Backfills
         for (const [chainName, provider] of this.providers.entries()) {

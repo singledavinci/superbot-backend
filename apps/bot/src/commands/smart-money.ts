@@ -3,16 +3,7 @@ import { prisma } from '@superbot/database';
 
 export const data = new SlashCommandBuilder()
     .setName('smart-money')
-    .setDescription('Show a leaderboard of the most profitable wallets being tracked.')
-    .addStringOption(opt => 
-        opt.setName('chain')
-            .setDescription('Filter by chain')
-            .addChoices(
-                { name: 'Ethereum', value: 'ethereum' },
-                { name: 'Polygon', value: 'polygon' },
-                { name: 'Base', value: 'base' }
-            )
-    );
+    .setDescription('Show a leaderboard of the most profitable wallets being tracked.');
 
 export async function execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply();
