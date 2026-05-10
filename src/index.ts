@@ -7,6 +7,17 @@ dotenv.config();
  * on platforms like Railway by setting the SERVICE_TYPE environment variable.
  */
 
+// Process-level safety net: a stray async error in any service (e.g. a transient
+// 429 from a chain RPC bubbling up as an unhandled WebSocket 'error' event) must
+// NOT take down the whole process. Especially in MONOLITH mode where API/bot/indexer/worker
+// share one process, this prevents one chain blip from crashing all services.
+process.on('uncaughtException', (err) => {
+    console.error('[Process] uncaughtException:', err instanceof Error ? err.stack || err.message : err);
+});
+process.on('unhandledRejection', (reason) => {
+    console.error('[Process] unhandledRejection:', reason instanceof Error ? reason.stack || reason.message : reason);
+});
+
 async function start() {
     const service = process.env.SERVICE_TYPE;
 
@@ -40,6 +51,12 @@ async function start() {
                 const worker = new EventWorker();
                 await worker.start();
                 break;
+            case 'sales-indexer':
+                console.log('💱 Loading Reservoir Sales Indexer Service...');
+                const { SalesIndexer } = await import('../apps/sales-indexer/src/index');
+                const salesIndexer = new SalesIndexer();
+                await salesIndexer.start();
+                break;
             default:
                 console.log('⚡ No SERVICE_TYPE specified. Running in MONOLITH mode (All services in one process)...');
                 const [BotMod, ApiMod, IndexerMod, WorkerMod] = await Promise.all([
@@ -65,6 +82,14 @@ async function start() {
         console.error('❌ Critical Error during service startup:', error);
         process.exit(1);
     }
+
+    // Keep the process alive for services that use listeners (like the API)
+    // or if the event loop would otherwise be empty.
+    console.log('🏁 Service startup sequence complete. Process is now active.');
+    await new Promise(() => {}); 
 }
 
-start();
+start().catch(err => {
+    console.error('🔥 Fatal Uncaught Error during initialization:', err);
+    process.exit(1);
+});

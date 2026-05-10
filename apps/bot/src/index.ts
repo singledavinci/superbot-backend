@@ -4,7 +4,8 @@ import fs from 'fs';
 import path from 'path';
 import { Worker, Job } from 'bullmq';
 import { redisConnection } from '@superbot/queue';
-import { createWhaleBuyEmbed, createMintAlertEmbed } from './embeds';
+import { prisma } from '@superbot/database';
+import { createWhaleBuyEmbed, createMintAlertEmbed, createFloorUpdateEmbed } from './embeds';
 
 dotenv.config();
 
@@ -50,14 +51,40 @@ export class SuperBot {
     }
 
     private async dispatchAlert(data: any) {
+        const eventId: string | undefined = data.eventId || data.txHash;
+        const channelId: string | undefined = data.channelId;
+        const alertType: string = data.alertType || 'UNKNOWN';
+        const deliveryKey = eventId && channelId ? `${alertType}:${eventId}:${channelId}` : null;
+
+        // Idempotency: skip if we already delivered this (eventId, channelId).
+        if (deliveryKey) {
+            try {
+                const existing = await prisma.alertDeliveryLog.findUnique({ where: { deliveryKey } });
+                if (existing && existing.status === 'delivered') {
+                    console.log(`[Delivery] Skipping duplicate alert (${deliveryKey}).`);
+                    return;
+                }
+            } catch (err) {
+                console.warn('[Delivery] AlertDeliveryLog lookup failed; proceeding without dedupe.', err);
+            }
+        }
+
         try {
             const channel = await this.client.channels.fetch(data.channelId) as TextChannel;
-            if (!channel || !channel.isTextBased()) return;
+            if (!channel || !channel.isTextBased()) {
+                if (deliveryKey) {
+                    await this.recordDelivery(deliveryKey, eventId!, channelId!, alertType, 'failed', 'channel_not_text');
+                }
+                return;
+            }
 
-            if (data.alertType === 'WHALE_BUY') {
+            let content = '';
+            if (data.mentionRoleId) {
+                content = `<@&${data.mentionRoleId}>`;
+            }
+
+            if (alertType === 'WHALE_BUY' || alertType === 'WHALE_SALE' || alertType === 'WHALE_MINT') {
                 const embed = createWhaleBuyEmbed(data);
-                
-                // Add interactive buttons
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     new ButtonBuilder()
                         .setLabel('View on Blur')
@@ -73,11 +100,14 @@ export class SuperBot {
                         .setStyle(ButtonStyle.Danger)
                 );
 
-                await channel.send({ embeds: [embed], components: [row] });
-            } else if (data.alertType === 'MINT_RADAR') {
+                await channel.send({ 
+                    content, 
+                    embeds: [embed], 
+                    components: [row],
+                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] }
+                });
+            } else if (alertType === 'MINT_RADAR') {
                 const embed = createMintAlertEmbed(data);
-                
-                // Add interactive buttons
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     new ButtonBuilder()
                         .setLabel('View Contract')
@@ -85,31 +115,82 @@ export class SuperBot {
                         .setURL(`https://etherscan.io/address/${data.contract}`)
                 );
 
-                await channel.send({ embeds: [embed], components: [row] });
+                await channel.send({ 
+                    content, 
+                    embeds: [embed], 
+                    components: [row],
+                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] }
+                });
+            } else if (alertType === 'FLOOR_UPDATE') {
+                const embed = createFloorUpdateEmbed(data);
+                await channel.send({ 
+                    content, 
+                    embeds: [embed],
+                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] }
+                });
+            }
+
+            if (deliveryKey) {
+                await this.recordDelivery(deliveryKey, eventId!, channelId!, alertType, 'delivered');
             }
         } catch (error) {
-            console.error(`[Delivery] Failed to dispatch alert to channel ${data.channelId}:`, error);
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[Delivery] Failed to dispatch alert to channel ${data.channelId}:`, message);
+            if (deliveryKey && eventId && channelId) {
+                await this.recordDelivery(deliveryKey, eventId, channelId, alertType, 'failed', message.slice(0, 500));
+            }
+        }
+    }
+
+    private async recordDelivery(
+        deliveryKey: string,
+        eventId: string,
+        channelId: string,
+        alertType: string,
+        status: 'delivered' | 'failed' | 'skipped_duplicate',
+        error?: string
+    ) {
+        try {
+            await prisma.alertDeliveryLog.upsert({
+                where: { deliveryKey },
+                create: { deliveryKey, eventId, channelId, alertType, status, error },
+                update: { status, error }
+            });
+        } catch (err) {
+            console.warn('[Delivery] Failed to record AlertDeliveryLog entry:', err);
         }
     }
 
     private async loadCommands() {
         const commandsPath = path.join(__dirname, 'commands');
-        if (!fs.existsSync(commandsPath)) return;
+        console.log(`[Debug] Looking for commands in: ${commandsPath}`);
+        
+        if (!fs.existsSync(commandsPath)) {
+            console.error(`[Debug] Commands path NOT FOUND: ${commandsPath}`);
+            return;
+        }
 
         const commandFiles = fs.readdirSync(commandsPath).filter(file => 
             (file.endsWith('.ts') || file.endsWith('.js')) && !file.endsWith('.d.ts')
         );
+        console.log(`[Debug] Found ${commandFiles.length} potential command files.`);
 
         const restCommands = [];
 
         for (const file of commandFiles) {
-            const filePath = path.join(commandsPath, file);
-            const command = await import(filePath);
-            
-            if ('data' in command && 'execute' in command) {
-                console.log(`📦 Loading command: /${command.data.name}`);
-                this.commands.set(command.data.name, command);
-                restCommands.push(command.data.toJSON());
+            try {
+                const filePath = path.join(commandsPath, file);
+                const command = await import(filePath);
+                
+                if ('data' in command && 'execute' in command) {
+                    console.log(`📦 Loading command: /${command.data.name}`);
+                    this.commands.set(command.data.name, command);
+                    restCommands.push(command.data.toJSON());
+                } else {
+                    console.warn(`[Debug] Skipping file ${file}: Missing data or execute.`);
+                }
+            } catch (err) {
+                console.error(`[Debug] Failed to load command file ${file}:`, err);
             }
         }
 

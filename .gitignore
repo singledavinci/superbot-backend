@@ -14,3 +14,5 @@ apps/*/node_modules
 !dist/**/*.js
 !dist/**/*.d.ts
 !dist/**/*.js.map
+# Allow shipped helper scripts
+!scripts/**

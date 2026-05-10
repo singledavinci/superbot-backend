@@ -13,12 +13,17 @@ export const data = new SlashCommandBuilder()
     )
     .addStringOption(opt =>
         opt.setName('label')
-            .setDescription('Friendly label for this wallet (e.g. "Pranksy")')
+            .setDescription('Friendly label for this wallet (max 32 chars)')
             .setRequired(false)
     )
     .addStringOption(opt =>
         opt.setName('channel-id')
-            .setDescription('Discord channel ID to route alerts to (uses default if omitted)')
+            .setDescription('Discord channel ID to route alerts to')
+            .setRequired(false)
+    )
+    .addRoleOption(opt =>
+        opt.setName('mention-role')
+            .setDescription('Role to ping for alerts from this wallet')
             .setRequired(false)
     );
 
@@ -26,8 +31,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true });
 
     const address   = interaction.options.getString('address', true).toLowerCase().trim();
-    const label     = interaction.options.getString('label') ?? null;
+    const label     = interaction.options.getString('label')?.substring(0, 32) ?? null;
     const channelId = interaction.options.getString('channel-id') ?? null;
+    const role      = interaction.options.getRole('mention-role');
     const guildId   = interaction.guildId!;
 
     // Validate ETH address
@@ -57,8 +63,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         // Upsert tracked wallet
         const wallet = await prisma.trackedWallet.upsert({
             where:  { address_guildId: { address, guildId: guild.id } },
-            create: { guildId: guild.id, address, label, alertChannelId: targetChannelId },
-            update: { label, alertChannelId: targetChannelId },
+            create: { guildId: guild.id, address, label, alertChannelId: targetChannelId, mentionRoleId: role?.id },
+            update: { label, alertChannelId: targetChannelId, mentionRoleId: role?.id },
         });
 
         const embed = new EmbedBuilder()
@@ -68,8 +74,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 { name: 'Address', value: `\`${address}\``, inline: false },
                 { name: 'Label',   value: label ?? '—',     inline: true },
                 { name: 'Alerts →', value: `<#${targetChannelId}>`, inline: true },
+                { name: 'Ping Role', value: role ? `<@&${role.id}>` : '—', inline: true }
             )
-            .setFooter({ text: 'SuperBot Intelligence' })
+            .setFooter({ text: 'SuperBot Intelligence • Not financial advice' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });

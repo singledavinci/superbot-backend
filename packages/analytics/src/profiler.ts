@@ -17,10 +17,15 @@ export class SmartMoneyProfiler {
     public async getWalletProfile(address: string): Promise<WalletProfile> {
         try {
             if (!this.apiKey) {
-                // If no API key is provided, return mock algorithm data based on the wallet address 
-                // to allow local testing and development to continue smoothly.
-                console.warn(`[Profiler] No API key found. Returning simulated profile for ${address}.`);
-                return this.simulateProfile(address);
+                // No provider configured yet. Return a neutral profile so the pipeline stays functional
+                // without fabricating performance metrics.
+                console.warn(`[Profiler] No API key found. Returning neutral profile for ${address}.`);
+                return {
+                    address,
+                    winRate: 0.5,
+                    totalFlips: 0,
+                    realizedProfit: 0
+                };
             }
 
             // Example integration structure for a generic NFT indexer API
@@ -37,7 +42,12 @@ export class SmartMoneyProfiler {
             };
             */
 
-            return this.simulateProfile(address);
+            return {
+                address,
+                winRate: 0.5,
+                totalFlips: 0,
+                realizedProfit: 0
+            };
         } catch (error) {
             console.error(`[Profiler] Failed to fetch wallet profile for ${address}:`, error);
             // Fallback to neutral profile to avoid blocking the pipeline
@@ -50,18 +60,4 @@ export class SmartMoneyProfiler {
         }
     }
 
-    /**
-     * Fallback mock data generator based on address hash.
-     */
-    private simulateProfile(address: string): WalletProfile {
-        // Generate deterministic pseudorandom data based on address
-        const pseudoRandom = parseInt(address.slice(2, 8), 16) / 0xffffff;
-        
-        return {
-            address,
-            winRate: 0.3 + (pseudoRandom * 0.6), // Win rate between 30% and 90%
-            totalFlips: Math.floor(pseudoRandom * 150),
-            realizedProfit: pseudoRandom * 120.5 // up to ~120 ETH profit
-        };
-    }
 }

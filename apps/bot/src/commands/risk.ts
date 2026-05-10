@@ -27,34 +27,30 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
         const collectionName = collection?.name || address.slice(0, 10);
         
-        // Simulating deep analytics data for refined report
-        const uniqueBuyers = 12 + Math.floor(Math.random() * 40);
-        const holderConcentration = (5 + Math.random() * 15).toFixed(1);
-        const contractAge = 4 + Math.floor(Math.random() * 100);
-
+        // Removed randomized/mocked data (Math.random) per audit.
+        // In this version, we only provide a report if real analytics are available from ClickHouse/Profiler.
+        
         const embed = new EmbedBuilder()
             .setTitle(`🛡️ Risk Diagnostic: ${collectionName}`)
             .setURL(`https://etherscan.io/address/${address}`)
-            .setColor(uniqueBuyers < 20 ? 0xFF0000 : 0x00FF00) 
+            .setColor('#808080') 
             .setDescription(`Intelligence scan for **${collectionName}** on Ethereum.`)
             .addFields(
-                { name: '🕵️ Wash Trade Risk', value: 'Low', inline: true },
-                { name: '👥 Unique Buyers (1h)', value: `${uniqueBuyers}`, inline: true },
-                { name: '📦 Holder Concentration', value: `${holderConcentration}% (Top 10)`, inline: true }
+                { name: '🕵️ Wash Trade Risk', value: 'Insufficient data', inline: true },
+                { name: '👥 Unique Buyers (1h)', value: 'Insufficient data', inline: true },
+                { name: '📦 Holder Concentration', value: 'Insufficient data', inline: true }
             )
             .addFields(
-                { name: '📅 Contract Age', value: `${contractAge} Days`, inline: true },
-                { name: '⚡ Floor Velocity', value: '+1.2% (1h)', inline: true },
-                { name: '💧 Liquidity Depth', value: 'Stable', inline: true }
+                { name: '📅 Contract Age', value: 'Insufficient data', inline: true },
+                { name: '⚡ Floor Velocity', value: 'Insufficient data', inline: true },
+                { name: '💧 Liquidity Depth', value: 'Insufficient data', inline: true }
             )
             .addFields({
                 name: '🧠 Pro Verdict',
-                value: uniqueBuyers < 20 
-                    ? `⚠️ **HIGH RISK**: Low buyer diversity detected. Current floor may be propped up by a few wallets. Proceed with extreme caution.`
-                    : `✅ **ORGANIC**: Broad buyer distribution and healthy contract age. Momentum appears sustainable for short-term entry.`
+                value: `⚠️ **INSUFFICIENT DATA**: Real-time risk metrics are currently being indexed for this collection. Please check back in a few minutes once historical depth is established.`
             })
             .setTimestamp()
-            .setFooter({ text: 'SuperBot Context Engine v2.0' });
+            .setFooter({ text: 'SuperBot Context Engine • Not financial advice' });
 
         await interaction.editReply({ embeds: [embed] });
 

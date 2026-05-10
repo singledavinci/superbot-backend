@@ -25,15 +25,21 @@ export const data = new SlashCommandBuilder()
         opt.setName('channel-id')
             .setDescription('Discord channel ID to route alerts to')
             .setRequired(false)
+    )
+    .addRoleOption(opt =>
+        opt.setName('mention-role')
+            .setDescription('Role to ping for alerts from this collection')
+            .setRequired(false)
     );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true });
 
     const contract    = interaction.options.getString('contract', true).toLowerCase().trim();
-    const name        = interaction.options.getString('name', true);
+    const name        = interaction.options.getString('name', true).substring(0, 32);
     const floorAlert  = interaction.options.getNumber('floor-alert') ?? null;
     const channelId   = interaction.options.getString('channel-id') ?? null;
+    const role        = interaction.options.getRole('mention-role');
     const guildId     = interaction.guildId!;
 
     if (!ethers.isAddress(contract)) {
@@ -59,8 +65,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
         const collection = await prisma.trackedCollection.upsert({
             where:  { contractAddress_guildId: { contractAddress: contract, guildId: guild.id } },
-            create: { guildId: guild.id, contractAddress: contract, name, floorAlertPct: floorAlert, alertChannelId: targetChannelId },
-            update: { name, floorAlertPct: floorAlert, alertChannelId: targetChannelId },
+            create: { guildId: guild.id, contractAddress: contract, name, floorAlertPct: floorAlert, alertChannelId: targetChannelId, mentionRoleId: role?.id },
+            update: { name, floorAlertPct: floorAlert, alertChannelId: targetChannelId, mentionRoleId: role?.id },
         });
 
         const embed = new EmbedBuilder()
@@ -71,8 +77,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 { name: 'Contract',   value: `\`${contract.slice(0, 12)}...\``, inline: true },
                 { name: 'Floor Alert', value: floorAlert ? `-${floorAlert}%` : 'Disabled', inline: true },
                 { name: 'Alerts →',   value: `<#${targetChannelId}>`, inline: true },
+                { name: 'Ping Role', value: role ? `<@&${role.id}>` : '—', inline: true }
             )
-            .setFooter({ text: 'SuperBot Intelligence' })
+            .setFooter({ text: 'SuperBot Intelligence • Not financial advice' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });

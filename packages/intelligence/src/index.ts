@@ -1,15 +1,17 @@
 import { WalletProfile, IntelligenceReport, SignalGrade } from '@superbot/types';
 
+export * from './SaleDetector';
+
 export class ContextEngine {
     /**
      * Analyzes a whale buy event and generates contextual insights.
      */
     public analyzeWhaleBuy(
         profile: WalletProfile, 
-        isFirstEntry: boolean, 
-        floorChange1h: number, 
-        listingChange1h: number,
-        uniqueBuyers1h: number,
+        isFirstEntry: boolean | null,
+        floorChange1h: number | null,
+        listingChange1h: number | null,
+        uniqueBuyers1h: number | null,
         isWashTrade: boolean = false
     ): IntelligenceReport {
         let grade: SignalGrade = 'Neutral';
@@ -30,33 +32,41 @@ export class ContextEngine {
 
         if (profile.winRate > 0.6) {
             context += `This ${isEliteWhale ? 'Elite ' : ''}wallet has a ${(profile.winRate * 100).toFixed(0)}% profitable flip rate across ${profile.totalFlips} trades. `;
-            if (isFirstEntry) context += `This is the wallet's first entry into the collection. `;
+            if (isFirstEntry === true) context += `This is the wallet's first entry into the collection. `;
             
-            if (floorChange1h > 0.08 && listingChange1h < -0.05) {
-                grade = 'Strong Bullish';
-                context += `Exceptional momentum: Floor +${(floorChange1h * 100).toFixed(1)}% and listings -${(Math.abs(listingChange1h) * 100).toFixed(1)}% in 1h. `;
-            } else if (floorChange1h > 0.02) {
-                grade = 'Weak Bullish';
-                context += `Moderate momentum: Floor +${(floorChange1h * 100).toFixed(1)}% in 1h. `;
+            if (typeof floorChange1h === 'number' && typeof listingChange1h === 'number') {
+                if (floorChange1h > 0.08 && listingChange1h < -0.05) {
+                    grade = 'Strong Bullish';
+                    context += `Exceptional momentum: Floor +${(floorChange1h * 100).toFixed(1)}% and listings -${(Math.abs(listingChange1h) * 100).toFixed(1)}% in 1h. `;
+                } else if (floorChange1h > 0.02) {
+                    grade = 'Weak Bullish';
+                    context += `Moderate momentum: Floor +${(floorChange1h * 100).toFixed(1)}% in 1h. `;
+                } else {
+                    grade = 'Neutral';
+                    context += `Floor price is currently stable. `;
+                }
             } else {
-                grade = 'Neutral';
-                context += `Floor price is currently stable. `;
+                context += `Market momentum metrics are not available yet for this alert. `;
             }
         } else {
             context += `This wallet has a moderate/low profit history. Accumulation here is less predictive. `;
         }
 
-        // Risk Overlays
-        if (uniqueBuyers1h < 10) {
-            grade = 'High Risk';
-            risk = `EXTREME RISK: Only ${uniqueBuyers1h} unique buyers in 1h. Very low liquidity.`;
-            nextWatch = `Wait for unique buyers to cross 30 before considering an entry.`;
-        } else if (uniqueBuyers1h < 25) {
-            if (grade === 'Strong Bullish') grade = 'Weak Bullish'; // Downgrade due to concentration
-            risk = `Low buyer diversity (${uniqueBuyers1h} unique). Price may be volatile.`;
-            nextWatch = `Watch for more distributed accumulation across different wallet tiers.`;
+        // Risk overlays (requires real liquidity metrics)
+        if (typeof uniqueBuyers1h === 'number') {
+            if (uniqueBuyers1h < 10) {
+                grade = 'High Risk';
+                risk = `EXTREME RISK: Only ${uniqueBuyers1h} unique buyers in 1h. Very low liquidity.`;
+                nextWatch = `Wait for unique buyers to cross 30 before considering an entry.`;
+            } else if (uniqueBuyers1h < 25) {
+                if (grade === 'Strong Bullish') grade = 'Weak Bullish'; // Downgrade due to concentration
+                risk = `Low buyer diversity (${uniqueBuyers1h} unique). Price may be volatile.`;
+                nextWatch = `Watch for more distributed accumulation across different wallet tiers.`;
+            } else {
+                nextWatch = `Watch for a potential breakout if floor volume sustains.`;
+            }
         } else {
-            nextWatch = `Watch for a potential breakout if floor volume sustains.`;
+            nextWatch = `Watch follow-through activity before entering (liquidity metrics unavailable).`;
         }
 
         return { grade, context, risk, nextWatch };

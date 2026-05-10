@@ -13,6 +13,10 @@ export class AdminAPI {
     private port = Number(process.env.PORT) || 3000;
 
     constructor() {
+        this.app.use((req, res, next) => {
+            console.log(`[API] ${req.method} ${req.url}`);
+            next();
+        });
         this.app.use(cors());
         this.app.use(helmet());
         this.app.use(express.json());
