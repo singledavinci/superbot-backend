@@ -5,6 +5,7 @@ import type {
     CollectionMetadata,
     WalletProfile,
 } from '@superbot/analytics';
+import { links } from './links';
 
 /** Truncate a 0x-prefixed hex address for display: 0x1234…abcd. */
 function shortAddr(addr: string | null | undefined, prefix = 6, suffix = 4): string {
@@ -188,14 +189,13 @@ export function createWhaleBuyEmbed(data: {
         });
     }
 
-    const links = buildExternalLinks({
+    const linkLine = buildExternalLinks({
         contract: data.contract,
         tokenId: data.tokenId,
         txHash: data.txHash,
         nftOpenseaUrl: data.nftMeta?.openseaUrl ?? null,
-        wallet: data.wallet,
     });
-    if (links) embed.addFields({ name: 'Links', value: links, inline: false });
+    if (linkLine) embed.addFields({ name: 'Links', value: linkLine, inline: false });
 
     embed
         .setTimestamp()
@@ -245,7 +245,7 @@ export function createClusterBuyEmbed(data: {
         {
             name: 'Latest buy (tx)',
             value: /^0x[a-fA-F0-9]{64}$/.test(data.triggerTxHash)
-                ? `[Etherscan](https://etherscan.io/tx/${data.triggerTxHash})`
+                ? `[Tx](${links.etherscan.tx(data.triggerTxHash)})`
                 : 'Not available',
             inline: true,
         },
@@ -265,6 +265,12 @@ export function createClusterBuyEmbed(data: {
             inline: true,
         });
     }
+
+    embed.addFields({
+        name: 'Links',
+        value: markdownCollectionToolkit(data.contract, data.collectionMeta?.slug),
+        inline: false,
+    });
 
     return embed
         .setTimestamp()
@@ -308,6 +314,12 @@ export function createMintAlertEmbed(data: {
     embed.addFields({
         name: '🧠 AI Context Engine',
         value: `*Contract is receiving rapid mint volume. Verify contract age and source before interacting.*`,
+    });
+
+    embed.addFields({
+        name: 'Links',
+        value: markdownCollectionToolkit(data.contract, data.collectionMeta?.slug),
+        inline: false,
     });
 
     embed
@@ -392,6 +404,16 @@ export function createSweepEmbed(data: {
         embed.addFields({ name: 'Token IDs (sample)', value: shortTokens.slice(0, 900), inline: false });
     }
 
+    const collectionSlug =
+        data.collectionMeta?.slug ??
+        data.sampleNftMetas?.find(m => m.collectionSlug)?.collectionSlug ??
+        null;
+    embed.addFields({
+        name: 'Links',
+        value: markdownCollectionToolkit(data.contract, collectionSlug),
+        inline: false,
+    });
+
     return embed
         .setTimestamp()
         .setFooter({ text: 'SuperBot Market Intelligence • Not financial advice' });
@@ -414,6 +436,7 @@ export function createMassListingEmbed(data: {
             { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: true },
             { name: 'Chain', value: data.chain, inline: true },
             { name: 'New listings (window)', value: `${data.listingCount} / ~${mins} min`, inline: false },
+            { name: 'Links', value: markdownCollectionToolkit(data.contract, null), inline: false },
         )
         .setTimestamp()
         .setFooter({ text: 'SuperBot Market Intelligence • Not financial advice' });
@@ -441,6 +464,7 @@ export function createFloorMovementEmbed(data: {
             { name: 'Previous', value: `${data.prevFloor} ${data.currency}`, inline: true },
             { name: 'Move', value: `${data.pctChange.toFixed(2)}%`, inline: true },
             { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: false },
+            { name: 'Links', value: markdownCollectionToolkit(data.contract, null), inline: false },
         )
         .setTimestamp()
         .setFooter({ text: 'SuperBot Market Data • Not financial advice' });
@@ -459,6 +483,7 @@ export function createFloorUpdateEmbed(data: {
         .addFields(
             { name: 'New Floor', value: `${data.floorPrice} ${data.currency}`, inline: true },
             { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: true },
+            { name: 'Links', value: markdownCollectionToolkit(data.contract, null), inline: false },
         )
         .setTimestamp()
         .setFooter({ text: 'SuperBot Market Data • Not financial advice' });
@@ -466,26 +491,38 @@ export function createFloorUpdateEmbed(data: {
     return embed;
 }
 
-/** Builds a compact link block (NFT · Tx · Wallet · Etherscan) for embed footers. */
+/** Markdown: OpenSea (collection page when slug known) · CatchMint · Etherscan token contract. */
+export function markdownCollectionToolkit(contract: string, slug?: string | null): string {
+    const parts: string[] = [];
+    const s = typeof slug === 'string' ? slug.trim() : '';
+    if (s) {
+        parts.push(`[OpenSea](${links.opensea.collection(s)})`);
+    }
+    parts.push(`[CatchMint](${links.catchmint.collection(contract)})`);
+    parts.push(`[Etherscan](${links.etherscan.token(contract)})`);
+    return parts.join(' · ');
+}
+
+/** NFT-scope alerts: OpenSea · CatchMint (collection mint page) · Etherscan NFT; optional Tx hash link. */
 function buildExternalLinks(args: {
     contract: string;
     tokenId?: string;
     txHash?: string;
     nftOpenseaUrl?: string | null;
-    wallet?: string;
 }): string | null {
     const parts: string[] = [];
-    if (args.nftOpenseaUrl) {
-        parts.push(`[OpenSea NFT](${args.nftOpenseaUrl})`);
-    } else if (args.contract && args.tokenId) {
-        parts.push(`[OpenSea NFT](https://opensea.io/assets/ethereum/${args.contract.toLowerCase()}/${args.tokenId})`);
+    if ((args.contract && args.tokenId) || args.nftOpenseaUrl) {
+        const openSeaUrl =
+            args.nftOpenseaUrl ??
+            (args.contract && args.tokenId ? links.opensea.nft(args.contract, args.tokenId) : null);
+        if (openSeaUrl) parts.push(`[OpenSea](${openSeaUrl})`);
+        if (args.contract) parts.push(`[CatchMint](${links.catchmint.collection(args.contract)})`);
+        if (args.contract && args.tokenId) {
+            parts.push(`[Etherscan](${links.etherscan.nft(args.contract, args.tokenId)})`);
+        }
     }
     if (args.txHash && /^0x[a-fA-F0-9]{64}$/.test(args.txHash)) {
-        parts.push(`[Tx](https://etherscan.io/tx/${args.txHash})`);
-    }
-    if (args.wallet) {
-        parts.push(`[Etherscan](https://etherscan.io/address/${args.wallet})`);
-        parts.push(`[Profile](https://opensea.io/${args.wallet})`);
+        parts.push(`[Tx](${links.etherscan.tx(args.txHash)})`);
     }
     return parts.length > 0 ? parts.join(' · ') : null;
 }

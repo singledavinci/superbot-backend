@@ -1,6 +1,8 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { ethers } from 'ethers';
 import { prisma } from '@superbot/database';
+import { markdownCollectionToolkit } from '../embeds';
+import { links } from '../links';
 
 export const data = new SlashCommandBuilder()
     .setName('collection')
@@ -27,7 +29,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
         const embed = new EmbedBuilder()
             .setTitle(`📊 Collection Intelligence: ${collection?.name || 'Unknown'}`)
-            .setURL(`https://blur.io/collection/${address}`)
+            .setURL(links.etherscan.token(address))
             .setColor(0x00FF00)
             .addFields(
                 { name: '💎 Floor Price', value: '4.20 ETH', inline: true },
@@ -39,6 +41,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 { name: '📦 Total Listed', value: '184 (1.8%)', inline: true },
                 { name: '⚡ Sales Velocity', value: '8 sales/hr', inline: true }
             )
+            .addFields({ name: 'Links', value: markdownCollectionToolkit(address, null), inline: false })
             .setFooter({ text: 'Data sourced from Ethereum indexer + Context Engine' })
             .setTimestamp();
 

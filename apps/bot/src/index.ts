@@ -15,8 +15,50 @@ import {
     createFloorMovementEmbed,
     createClusterBuyEmbed,
 } from './embeds';
+import { links } from './links';
 
 dotenv.config();
+
+function nftMarketplaceButtons(contract: string, tokenId: string): ButtonBuilder[] {
+    return [
+        new ButtonBuilder()
+            .setLabel('OpenSea')
+            .setStyle(ButtonStyle.Link)
+            .setURL(links.opensea.nft(contract, tokenId)),
+        new ButtonBuilder()
+            .setLabel('CatchMint')
+            .setStyle(ButtonStyle.Link)
+            .setURL(links.catchmint.collection(contract)),
+        new ButtonBuilder()
+            .setLabel('Etherscan')
+            .setStyle(ButtonStyle.Link)
+            .setURL(links.etherscan.nft(contract, tokenId)),
+    ];
+}
+
+function collectionMarketplaceButtons(contract: string, collectionSlug?: string | null): ButtonBuilder[] {
+    const buttons: ButtonBuilder[] = [];
+    const slug = typeof collectionSlug === 'string' ? collectionSlug.trim() : '';
+    if (slug) {
+        buttons.push(
+            new ButtonBuilder()
+                .setLabel('OpenSea')
+                .setStyle(ButtonStyle.Link)
+                .setURL(links.opensea.collection(slug)),
+        );
+    }
+    buttons.push(
+        new ButtonBuilder()
+            .setLabel('CatchMint')
+            .setStyle(ButtonStyle.Link)
+            .setURL(links.catchmint.collection(contract)),
+        new ButtonBuilder()
+            .setLabel('Etherscan')
+            .setStyle(ButtonStyle.Link)
+            .setURL(links.etherscan.token(contract)),
+    );
+    return buttons;
+}
 
 export class SuperBot {
     public client: Client;
@@ -225,10 +267,7 @@ export class SuperBot {
                     counterpartyProfile: data.counterpartyProfile ?? null,
                 });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                    new ButtonBuilder()
-                        .setLabel('View on Blur')
-                        .setStyle(ButtonStyle.Link)
-                        .setURL(`https://blur.io/collection/${data.contract}`),
+                    ...nftMarketplaceButtons(data.contract, String(data.tokenId)),
                     new ButtonBuilder()
                         .setCustomId(`stats_${data.wallet}`)
                         .setLabel('View Wallet Stats')
@@ -236,7 +275,7 @@ export class SuperBot {
                     new ButtonBuilder()
                         .setCustomId(`mute_${data.wallet}`)
                         .setLabel('Mute this Wallet')
-                        .setStyle(ButtonStyle.Danger)
+                        .setStyle(ButtonStyle.Danger),
                 );
 
                 await channel.send({ 
@@ -254,10 +293,7 @@ export class SuperBot {
                     collectionMeta: data.collectionMeta ?? null,
                 });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                    new ButtonBuilder()
-                        .setLabel('View Contract')
-                        .setStyle(ButtonStyle.Link)
-                        .setURL(`https://etherscan.io/address/${data.contract}`)
+                    ...collectionMarketplaceButtons(data.contract, data.collectionMeta?.slug ?? null),
                 );
 
                 await channel.send({ 
@@ -288,15 +324,16 @@ export class SuperBot {
                     buyerProfile: data.buyerProfile ?? null,
                     sampleNftMetas: Array.isArray(data.sampleNftMetas) ? data.sampleNftMetas : [],
                 });
+                const sweepSlug =
+                    data.collectionMeta?.slug ??
+                    (Array.isArray(data.sampleNftMetas) && data.sampleNftMetas[0]?.collectionSlug) ??
+                    null;
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     new ButtonBuilder()
                         .setLabel('Transaction')
                         .setStyle(ButtonStyle.Link)
-                        .setURL(`https://etherscan.io/tx/${data.txHash}`),
-                    new ButtonBuilder()
-                        .setLabel('Collection')
-                        .setStyle(ButtonStyle.Link)
-                        .setURL(`https://blur.io/collection/${data.contract}`),
+                        .setURL(links.etherscan.tx(data.txHash)),
+                    ...collectionMarketplaceButtons(data.contract, sweepSlug),
                 );
                 await channel.send({
                     content,
@@ -307,10 +344,7 @@ export class SuperBot {
             } else if (alertType === 'MASS_LISTING') {
                 const embed = createMassListingEmbed(data);
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                    new ButtonBuilder()
-                        .setLabel('Contract')
-                        .setStyle(ButtonStyle.Link)
-                        .setURL(`https://etherscan.io/address/${data.contract}`),
+                    ...collectionMarketplaceButtons(data.contract, null),
                 );
                 await channel.send({
                     content,
@@ -346,17 +380,22 @@ export class SuperBot {
                     collectionMeta: data.collectionMeta ?? null,
                     triggerProfile: data.triggerProfile ?? null,
                 });
-                const components =
-                    /^0x[a-fA-F0-9]{64}$/.test(triggerTxHash)
-                        ? [
-                              new ActionRowBuilder<ButtonBuilder>().addComponents(
-                                  new ButtonBuilder()
-                                      .setLabel('Trigger transaction')
-                                      .setStyle(ButtonStyle.Link)
-                                      .setURL(`https://etherscan.io/tx/${triggerTxHash}`),
-                              ),
-                          ]
-                        : [];
+                const slug = data.collectionMeta?.slug ?? null;
+                const marketplaceRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    ...collectionMarketplaceButtons(data.contract, slug),
+                );
+                const components: ActionRowBuilder<ButtonBuilder>[] = [];
+                if (/^0x[a-fA-F0-9]{64}$/.test(triggerTxHash)) {
+                    components.push(
+                        new ActionRowBuilder<ButtonBuilder>().addComponents(
+                            new ButtonBuilder()
+                                .setLabel('Trigger transaction')
+                                .setStyle(ButtonStyle.Link)
+                                .setURL(links.etherscan.tx(triggerTxHash)),
+                        ),
+                    );
+                }
+                components.push(marketplaceRow);
                 await channel.send({
                     content,
                     embeds: [embed],

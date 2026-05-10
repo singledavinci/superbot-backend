@@ -1,6 +1,8 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { ethers } from 'ethers';
 import { prisma } from '@superbot/database';
+import { markdownCollectionToolkit } from '../embeds';
+import { links } from '../links';
 
 export const data = new SlashCommandBuilder()
     .setName('risk')
@@ -32,7 +34,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         
         const embed = new EmbedBuilder()
             .setTitle(`🛡️ Risk Diagnostic: ${collectionName}`)
-            .setURL(`https://etherscan.io/address/${address}`)
+            .setURL(links.etherscan.token(address))
             .setColor('#808080') 
             .setDescription(`Intelligence scan for **${collectionName}** on Ethereum.`)
             .addFields(
@@ -45,6 +47,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 { name: '⚡ Floor Velocity', value: 'Insufficient data', inline: true },
                 { name: '💧 Liquidity Depth', value: 'Insufficient data', inline: true }
             )
+            .addFields({ name: 'Links', value: markdownCollectionToolkit(address, null), inline: false })
             .addFields({
                 name: '🧠 Pro Verdict',
                 value: `⚠️ **INSUFFICIENT DATA**: Real-time risk metrics are currently being indexed for this collection. Please check back in a few minutes once historical depth is established.`
