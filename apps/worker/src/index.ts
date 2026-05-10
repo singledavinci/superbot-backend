@@ -6,6 +6,24 @@ import { SniperEngine } from '@superbot/utils';
 import { ContextEngine, SaleDetector } from '@superbot/intelligence';
 import { ethers, JsonRpcProvider } from 'ethers';
 
+/**
+ * SaleDetector and other JsonRpcProvider clients require an HTTP(S) endpoint;
+ * passing them a `wss://` URL produces silent failures. We accept either an
+ * explicit HTTPS env var or fall back to converting the WSS URL to HTTPS,
+ * since Alchemy serves both at the same host.
+ */
+function resolveHttpRpcUrl(wssEnv: string, httpEnv: string): string | null {
+    const explicit = process.env[httpEnv]?.trim();
+    if (explicit) return explicit;
+
+    const wss = process.env[wssEnv]?.trim();
+    if (!wss) return null;
+    if (wss.startsWith('http://') || wss.startsWith('https://')) return wss;
+    if (wss.startsWith('wss://')) return 'https://' + wss.slice('wss://'.length);
+    if (wss.startsWith('ws://')) return 'http://' + wss.slice('ws://'.length);
+    return null;
+}
+
 
 export class EventWorker {
     private snipers = new Map<string, SniperEngine>();
@@ -20,12 +38,12 @@ export class EventWorker {
     constructor() {
         // Ethereum-only deployment. Re-add other chains here together with their
         // *_WSS_RPC_URL env vars when expanding multi-chain support.
-        if (process.env.WSS_RPC_URL) {
-            this.providers.set('ethereum', new JsonRpcProvider(process.env.WSS_RPC_URL));
-        }
-
-        for (const [chain] of this.providers) {
-            this.saleDetectors.set(chain, new SaleDetector(process.env[`${chain.toUpperCase()}_WSS_RPC_URL`] || ''));
+        const ethHttpUrl = resolveHttpRpcUrl('WSS_RPC_URL', 'HTTPS_RPC_URL');
+        if (ethHttpUrl) {
+            this.providers.set('ethereum', new JsonRpcProvider(ethHttpUrl));
+            this.saleDetectors.set('ethereum', new SaleDetector(ethHttpUrl));
+        } else {
+            console.warn('[Worker] No Ethereum RPC URL configured; sale detection will be disabled.');
         }
     }
 
