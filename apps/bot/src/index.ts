@@ -78,6 +78,13 @@ export class SuperBot {
 
         if (targets.length === 0) return;
 
+        try {
+            await rest.put(Routes.applicationCommands(clientId), { body: [] });
+            console.log('🧹 Cleared global slash commands (guild-scoped registration only).');
+        } catch (err) {
+            console.warn('[Bot] Could not clear global commands (non-fatal):', err);
+        }
+
         for (const gid of targets) {
             try {
                 await rest.put(Routes.applicationGuildCommands(clientId, gid), {
