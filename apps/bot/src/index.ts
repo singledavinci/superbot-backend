@@ -5,6 +5,7 @@ import path from 'path';
 import { Worker, Job } from 'bullmq';
 import { redisConnection } from '@superbot/queue';
 import { prisma } from '@superbot/database';
+import { registerGuildSlashCommandSync, type GuildSlashSyncResult } from './command-sync-context';
 import {
     createWhaleBuyEmbed,
     createMintAlertEmbed,
@@ -40,13 +41,14 @@ export class SuperBot {
         }
 
         await this.loadCommands();
+        registerGuildSlashCommandSync((guildId) => this.putSlashCommandsForGuild(guildId));
 
         this.client.once('ready', async () => {
             await this.ensureGuildRowsForConnectedServers();
             const prismaIds = (await prisma.guild.findMany({ select: { discordId: true } })).map(g => g.discordId);
             const cacheIds = [...this.client.guilds.cache.keys()];
             const guildIds = [...new Set([...prismaIds, ...cacheIds])];
-            console.log(`🔧 Syncing slash commands across ${guildIds.length} guild(s) (instant per-guild rollout)`);
+            console.log(`[Bot] Syncing slash commands across ${guildIds.length} guild(s) (global + per-guild)`);
             await this.syncSlashCommandsToGuilds(guildIds);
         });
 
@@ -59,7 +61,7 @@ export class SuperBot {
         this.registerEvents();
 
         await this.client.login(process.env.DISCORD_TOKEN);
-        console.log(`🤖 Bot logged in as ${this.client.user?.tag}`);
+        console.log(`[Bot] Logged in as ${this.client.user?.tag}`);
 
         this.startDeliveryDispatcher();
     }
@@ -86,13 +88,40 @@ export class SuperBot {
         }
     }
 
+    private restErrorMeta(err: unknown): { status?: number; message: string } {
+        let status: number | undefined;
+        if (typeof err === 'object' && err !== null && 'status' in err) {
+            const s = (err as { status: unknown }).status;
+            if (typeof s === 'number') status = s;
+        }
+        const message = err instanceof Error ? err.message : String(err);
+        return { status, message };
+    }
+
+    private async putSlashCommandsForGuild(guildId: string): Promise<GuildSlashSyncResult> {
+        if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_TOKEN || !this.restCommandBodies.length) {
+            return { ok: false, message: 'Missing DISCORD_CLIENT_ID, DISCORD_TOKEN, or no commands loaded.' };
+        }
+        const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+        try {
+            await rest.put(Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, guildId), {
+                body: this.restCommandBodies,
+            });
+            return { ok: true, commandCount: this.restCommandBodies.length };
+        } catch (err: unknown) {
+            const { status, message } = this.restErrorMeta(err);
+            return { ok: false, status, message };
+        }
+    }
+
     private async syncSlashCommandsToGuilds(guildIds: string[]) {
         if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_TOKEN || !this.restCommandBodies.length) {
-            console.warn('[Bot] Missing client id/token or commands; skipping guild command sync.');
+            console.warn('[Bot] Missing client id/token or commands; skipping command sync.');
             return;
         }
         const clientId = process.env.DISCORD_CLIENT_ID;
         const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+        const n = this.restCommandBodies.length;
 
         const devGuild = process.env.DEV_GUILD_ID;
         let targets = [...new Set(guildIds)].filter(Boolean);
@@ -100,23 +129,36 @@ export class SuperBot {
             targets = [...new Set([...targets, devGuild])];
         }
 
-        if (targets.length === 0) return;
-
+        let globalCount: number | 'FAIL' = 'FAIL';
         try {
-            await rest.put(Routes.applicationCommands(clientId), { body: [] });
-            console.log('🧹 Cleared global slash commands (guild-scoped registration only).');
-        } catch (err) {
-            console.warn('[Bot] Could not clear global commands (non-fatal):', err);
+            await rest.put(Routes.applicationCommands(clientId), { body: this.restCommandBodies });
+            globalCount = n;
+            console.log(`[Bot] Synced ${n} global slash commands.`);
+        } catch (err: unknown) {
+            const { status, message } = this.restErrorMeta(err);
+            console.error(`[Bot] Global command PUT failed status=${status ?? '?'}:`, message);
         }
 
+        let success = 0;
+        let failed = 0;
         for (const gid of targets) {
-            try {
-                await rest.put(Routes.applicationGuildCommands(clientId, gid), {
-                    body: this.restCommandBodies,
-                });
-            } catch (err) {
-                console.error(`❌ Slash command PUT failed for guild ${gid}`, err);
+            const r = await this.putSlashCommandsForGuild(gid);
+            if (r.ok) {
+                success++;
+                console.log(`[Bot] Synced ${n} commands to guild ${gid}`);
+            } else {
+                failed++;
+                console.error(`[Bot] Guild command PUT failed guildId=${gid} status=${r.status ?? '?'}: ${r.message ?? ''}`);
             }
+        }
+
+        console.log(`[Bot] Command sync complete. Global=${globalCount}, Guilds: success=${success}, failed=${failed}`);
+
+        if (process.env.DISCORD_CLIENT_ID) {
+            const cid = process.env.DISCORD_CLIENT_ID;
+            console.log(
+                `[Bot] Invite URL (bot + slash scopes): https://discord.com/oauth2/authorize?client_id=${cid}&permissions=2147485696&scope=bot%20applications.commands`
+            );
         }
     }
 
