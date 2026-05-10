@@ -6,4 +6,5 @@ export * from './ReservoirSales';
 export * from './AlchemySales';
 export * from './OpenSeaSales';
 export * from './SweepDetector';
+export * from './SmartMoneyClusterDetector';
 export * from './MassListingDetector';

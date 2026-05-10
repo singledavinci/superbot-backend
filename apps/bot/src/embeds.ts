@@ -12,6 +12,8 @@ export function createWhaleBuyEmbed(data: {
     marketplace?: string;
     label?: string | null;
     intelligence?: IntelligenceReport;
+    /** On-chain NFT transfer graph hint only — informational, never suppresses the alert. */
+    possibleWashTrading?: boolean;
 }) {
     let title = '🚨 Whale Entry Detected';
     let color = getGradeColor(data.intelligence?.grade);
@@ -51,7 +53,49 @@ export function createWhaleBuyEmbed(data: {
         embed.addFields({ name: '⚠️ Risk', value: `*${data.intelligence.risk}*` });
     }
 
+    if (data.possibleWashTrading) {
+        embed.addFields({
+            name: '⚠ Possible wash',
+            value:
+                '*Buyer and seller had an NFT transfer between them in the last 30 days (best-effort graph). Not a verdict — verify on-chain.*',
+        });
+    }
+
     return embed;
+}
+
+export function createClusterBuyEmbed(data: {
+    collectionName: string;
+    contract: string;
+    chain: string;
+    wallets: string[];
+    windowMinutes: number;
+    triggerTxHash: string;
+    triggerBuyer: string;
+}) {
+    const sample = data.wallets.slice(0, 12).join(', ') + (data.wallets.length > 12 ? '…' : '');
+    return new EmbedBuilder()
+        .setColor('#eab308')
+        .setTitle('🧲 Smart-money cluster (tracked wallets)')
+        .setDescription(
+            `**${data.wallets.length}** distinct watched wallets bought this collection within **~${data.windowMinutes} min**.`,
+        )
+        .addFields(
+            { name: 'Collection', value: data.collectionName, inline: true },
+            { name: 'Chain', value: data.chain, inline: true },
+            { name: 'Contract', value: `\`${data.contract.slice(0, 12)}…\``, inline: true },
+            { name: 'Wallets (sample)', value: sample.slice(0, 900) || '—', inline: false },
+            {
+                name: 'Latest buy (tx)',
+                value: /^0x[a-fA-F0-9]{64}$/.test(data.triggerTxHash)
+                    ? `[Etherscan](https://etherscan.io/tx/${data.triggerTxHash})`
+                    : 'Not available',
+                inline: true,
+            },
+            { name: 'Trigger buyer', value: `\`${data.triggerBuyer.slice(0, 10)}…\``, inline: true },
+        )
+        .setTimestamp()
+        .setFooter({ text: 'SuperBot Smart-Money • Not financial advice' });
 }
 
 export function createMintAlertEmbed(data: {

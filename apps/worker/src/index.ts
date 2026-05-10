@@ -5,8 +5,10 @@ import {
     clickhouse,
     SmartMoneyProfiler,
     SweepDetector,
+    SmartMoneyClusterDetector,
     type NormalizedSale,
     type SweepDetection,
+    type ClusterBuyDetection,
 } from '@superbot/analytics';
 import { SniperEngine } from '@superbot/utils';
 import { ContextEngine, SaleDetector } from '@superbot/intelligence';
@@ -31,11 +33,14 @@ function resolveHttpRpcUrl(wssEnv: string, httpEnv: string): string | null {
 }
 
 
+const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+
 export class EventWorker {
     private snipers = new Map<string, SniperEngine>();
     private profiler = new SmartMoneyProfiler();
     private contextEngine = new ContextEngine();
     private sweepDetector = new SweepDetector();
+    private clusterDetector = new SmartMoneyClusterDetector();
     private saleDetectors = new Map<string, SaleDetector>();
     private providers = new Map<string, JsonRpcProvider>();
     private profileCache = new Map<string, { profile: any, timestamp: number }>();
@@ -82,6 +87,34 @@ export class EventWorker {
         });
     }
 
+    /** Best-effort pairwise link for wash-trade hints (30d TTL); never throws. */
+    private async recordWashGraphEdge(walletA: string, walletB: string) {
+        const a = walletA.toLowerCase();
+        const b = walletB.toLowerCase();
+        if (!a || !b || a === ZERO_ADDR || b === ZERO_ADDR) return;
+        const lo = a < b ? a : b;
+        const hi = a < b ? b : a;
+        try {
+            await redisConnection.set(`wash_pair:${lo}:${hi}`, '1', 'EX', 30 * 24 * 3600);
+        } catch (err) {
+            console.warn('[Worker] wash graph redis set failed:', err);
+        }
+    }
+
+    private async recentWashPair(buyer: string, seller: string): Promise<boolean> {
+        const a = buyer.toLowerCase();
+        const b = seller.toLowerCase();
+        if (a === b) return false;
+        const lo = a < b ? a : b;
+        const hi = a < b ? b : a;
+        try {
+            const v = await redisConnection.get(`wash_pair:${lo}:${hi}`);
+            return v === '1';
+        } catch {
+            return false;
+        }
+    }
+
     private async handleTransfer(
         chain: string,
         contract: string,
@@ -92,6 +125,8 @@ export class EventWorker {
         eventId: string,
         rawJob: Record<string, unknown>,
     ) {
+        await this.recordWashGraphEdge(from, to);
+
         const jobPriceNative =
             typeof rawJob.priceNative === 'number'
                 ? rawJob.priceNative
@@ -181,6 +216,16 @@ export class EventWorker {
             if (sweep && trackedCollections.length > 0) {
                 await this.dispatchSweep(sweep, trackedCollections);
             }
+
+            const seenClusterGuilds = new Set<string>();
+            for (const w of trackedBuyers) {
+                if (seenClusterGuilds.has(w.guildId)) continue;
+                seenClusterGuilds.add(w.guildId);
+                const cluster = this.clusterDetector.ingest(normalized, w.guildId);
+                if (cluster) {
+                    await this.dispatchClusterBuy(cluster);
+                }
+            }
         }
 
         if (trackedBuyers.length === 0 && trackedSellers.length === 0) return;
@@ -214,6 +259,15 @@ export class EventWorker {
         // `channelId` so multiple routes never dedupe each other.
         const combinedTracked = [...trackedBuyers, ...trackedSellers];
         const uniqueGuildIds = new Set(combinedTracked.map(t => t.guildId));
+
+        let possibleWashTrading = false;
+        if (
+            eventType === 'SALE' &&
+            from !== ZERO_ADDR &&
+            (trackedBuyers.length > 0 || trackedSellers.length > 0)
+        ) {
+            possibleWashTrading = await this.recentWashPair(to, from);
+        }
 
         for (const gid of uniqueGuildIds) {
             const guild = await prisma.guild.findUnique({
@@ -261,6 +315,7 @@ export class EventWorker {
                         marketplace,
                         intelligence,
                         mentionRoleId: wallet.mentionRoleId,
+                        possibleWashTrading: possibleWashTrading || undefined,
                     },
                     {
                         jobId: `alert-${wallet.id}-${eventId}-${channelId}`,
@@ -268,6 +323,57 @@ export class EventWorker {
                 );
             }
         }
+    }
+
+    private async dispatchClusterBuy(det: ClusterBuyDetection) {
+        const guild = await prisma.guild.findUnique({
+            where: { id: det.guildDbId },
+            include: {
+                alertChannels: true,
+                trackedCollections: {
+                    where: {
+                        chain: 'ethereum',
+                        contractAddress: { equals: det.contract, mode: 'insensitive' },
+                    },
+                },
+            },
+        });
+        if (!guild) return;
+
+        const row = guild.trackedCollections[0];
+        const defaultWhaleChannelId =
+            guild.alertChannels.find(c => c.alertType === 'WHALE_BUY')?.discordChannelId ?? null;
+        const channelId = row?.alertChannelId ?? defaultWhaleChannelId;
+        if (!channelId) {
+            console.warn(
+                `[Worker] CLUSTER_BUY: no channel for guild ${guild.discordId} contract ${det.contract}; skip.`,
+            );
+            return;
+        }
+
+        const windowMin = Math.max(1, Math.round(det.windowMs / 60000));
+
+        await discordDeliveryQueue.add(
+            'discord_alert',
+            {
+                eventId: det.eventId,
+                channelId,
+                alertType: 'CLUSTER_BUY',
+                contract: det.contract,
+                chain: det.chain,
+                collectionName: row?.name ?? det.contract,
+                wallets: det.buyers,
+                windowMinutes: windowMin,
+                triggerTxHash: det.triggerTxHash,
+                triggerBuyer: det.triggerBuyer,
+                mentionRoleId: row?.mentionRoleId ?? null,
+            },
+            {
+                jobId: `cluster-${det.guildDbId}-${det.eventId}`,
+                removeOnComplete: { age: 3600 },
+                removeOnFail: { age: 86400 },
+            },
+        );
     }
 
     private async dispatchSweep(

@@ -12,6 +12,7 @@ import {
     createSweepEmbed,
     createMassListingEmbed,
     createFloorMovementEmbed,
+    createClusterBuyEmbed,
 } from './embeds';
 
 dotenv.config();
@@ -20,6 +21,8 @@ export class SuperBot {
     public client: Client;
     public commands: Collection<string, any>;
     private deliveryWorker: Worker | null = null;
+    /** Serialized slash command bodies for per-guild registration. */
+    private restCommandBodies: object[] = [];
 
     constructor() {
         this.client = new Client({
@@ -37,12 +40,53 @@ export class SuperBot {
         }
 
         await this.loadCommands();
+
+        this.client.once('ready', async () => {
+            const prismaIds = (await prisma.guild.findMany({ select: { discordId: true } })).map(g => g.discordId);
+            const cacheIds = [...this.client.guilds.cache.keys()];
+            const guildIds = [...new Set([...prismaIds, ...cacheIds])];
+            console.log(`🔧 Syncing slash commands across ${guildIds.length} guild(s) (instant per-guild rollout)`);
+            await this.syncSlashCommandsToGuilds(guildIds);
+        });
+
+        this.client.on('guildCreate', async guild => {
+            console.log(`➕ Joined guild ${guild.id}; registering slash commands`);
+            await this.syncSlashCommandsToGuilds([guild.id]);
+        });
+
         this.registerEvents();
 
         await this.client.login(process.env.DISCORD_TOKEN);
         console.log(`🤖 Bot logged in as ${this.client.user?.tag}`);
 
         this.startDeliveryDispatcher();
+    }
+
+    private async syncSlashCommandsToGuilds(guildIds: string[]) {
+        if (!process.env.DISCORD_CLIENT_ID || !process.env.DISCORD_TOKEN || !this.restCommandBodies.length) {
+            console.warn('[Bot] Missing client id/token or commands; skipping guild command sync.');
+            return;
+        }
+        const clientId = process.env.DISCORD_CLIENT_ID;
+        const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
+
+        const devGuild = process.env.DEV_GUILD_ID;
+        let targets = [...new Set(guildIds)].filter(Boolean);
+        if (devGuild) {
+            targets = [...new Set([...targets, devGuild])];
+        }
+
+        if (targets.length === 0) return;
+
+        for (const gid of targets) {
+            try {
+                await rest.put(Routes.applicationGuildCommands(clientId, gid), {
+                    body: this.restCommandBodies,
+                });
+            } catch (err) {
+                console.error(`❌ Slash command PUT failed for guild ${gid}`, err);
+            }
+        }
     }
 
     private startDeliveryDispatcher() {
@@ -91,7 +135,19 @@ export class SuperBot {
             }
 
             if (alertType === 'WHALE_BUY' || alertType === 'WHALE_SALE' || alertType === 'WHALE_MINT') {
-                const embed = createWhaleBuyEmbed(data);
+                const embed = createWhaleBuyEmbed({
+                    contract: data.contract,
+                    wallet: data.wallet,
+                    tokenId: data.tokenId,
+                    txHash: data.txHash,
+                    alertType: data.alertType,
+                    price: data.price,
+                    currency: data.currency,
+                    marketplace: data.marketplace,
+                    label: data.label,
+                    intelligence: data.intelligence,
+                    possibleWashTrading: Boolean(data.possibleWashTrading),
+                });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     new ButtonBuilder()
                         .setLabel('View on Blur')
@@ -182,6 +238,34 @@ export class SuperBot {
                     embeds: [embed],
                     allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
                 });
+            } else if (alertType === 'CLUSTER_BUY') {
+                const triggerTxHash = String(data.triggerTxHash || data.txHash || '');
+                const embed = createClusterBuyEmbed({
+                    collectionName: data.collectionName || data.contract,
+                    contract: data.contract,
+                    chain: data.chain || 'ethereum',
+                    wallets: Array.isArray(data.wallets) ? data.wallets : [],
+                    windowMinutes: Number(data.windowMinutes) || 30,
+                    triggerTxHash,
+                    triggerBuyer: data.triggerBuyer || '',
+                });
+                const components =
+                    /^0x[a-fA-F0-9]{64}$/.test(triggerTxHash)
+                        ? [
+                              new ActionRowBuilder<ButtonBuilder>().addComponents(
+                                  new ButtonBuilder()
+                                      .setLabel('Trigger transaction')
+                                      .setStyle(ButtonStyle.Link)
+                                      .setURL(`https://etherscan.io/tx/${triggerTxHash}`),
+                              ),
+                          ]
+                        : [];
+                await channel.send({
+                    content,
+                    embeds: [embed],
+                    components,
+                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                });
             }
 
             if (deliveryKey) {
@@ -248,29 +332,8 @@ export class SuperBot {
             }
         }
 
-        if (process.env.DISCORD_CLIENT_ID && process.env.DISCORD_TOKEN) {
-            try {
-                const rest = new REST({ version: '10' }).setToken(process.env.DISCORD_TOKEN);
-                
-                // If DEV_GUILD_ID is provided, register to that guild for INSTANT updates
-                if (process.env.DEV_GUILD_ID) {
-                    console.log(`⚡ Registering ${restCommands.length} commands to DEV GUILD: ${process.env.DEV_GUILD_ID}`);
-                    await rest.put(
-                        Routes.applicationGuildCommands(process.env.DISCORD_CLIENT_ID, process.env.DEV_GUILD_ID),
-                        { body: restCommands },
-                    );
-                } else {
-                    console.log(`🌐 Registering ${restCommands.length} commands GLOBALLY (may take 1h)...`);
-                    await rest.put(
-                        Routes.applicationCommands(process.env.DISCORD_CLIENT_ID),
-                        { body: restCommands },
-                    );
-                }
-                console.log('✅ Commands registered successfully.');
-            } catch (error) {
-                console.error('❌ Error registering commands:', error);
-            }
-        }
+        this.restCommandBodies = restCommands;
+        console.log(`📋 Loaded ${restCommands.length} slash command bodies (per-guild sync after ready).`);
     }
 
     private registerEvents() {

@@ -8,12 +8,68 @@ import axios from 'axios';
 
 dotenv.config();
 
+interface DashboardJwtPayload {
+    id?: string;
+    username?: string;
+    /** Preferred guild (Discord snowflake). */
+    guildId?: string;
+    /** Discord snowflakes where the user may access SuperBot guild routes (staff of that server). */
+    eligibleGuildIds?: string[];
+}
+
+/** Discord `@me/guilds` permission flags: Administrator (0x8) or Manage Guild (0x20). */
+function canManageDiscordServer(permissionsRaw: string): boolean {
+    try {
+        const p = BigInt(permissionsRaw);
+        const ADMIN = 8n;
+        const MANAGE_GUILD = 32n;
+        return (p & ADMIN) !== 0n || (p & MANAGE_GUILD) !== 0n;
+    } catch {
+        return false;
+    }
+}
+
+function discordGuildsEligibleForJwt(
+    userGuilds: Array<{ id: string; permissions: string }>,
+    dbDiscordIds: Set<string>,
+): string[] {
+    const eligible = userGuilds
+        .filter(ug => dbDiscordIds.has(ug.id) && canManageDiscordServer(String(ug.permissions)))
+        .map(ug => ug.id);
+    return [...new Set(eligible)].sort();
+}
+
+/** Guilds JWT may access — supports legacy tokens with only `guildId`. */
+function jwtEligibleDiscordGuilds(decoded: DashboardJwtPayload): string[] {
+    if (Array.isArray(decoded.eligibleGuildIds) && decoded.eligibleGuildIds.length) {
+        const ids = decoded.eligibleGuildIds.filter((id): id is string => typeof id === 'string' && id.length > 0);
+        return [...new Set(ids)];
+    }
+    return typeof decoded.guildId === 'string' && decoded.guildId ? [decoded.guildId] : [];
+}
+
 export class AdminAPI {
     private app = express();
     private port = Number(process.env.PORT) || 3000;
 
-    /** Require Authorization Bearer JWT whose `guildId` matches `req.params.id` (Discord guild snowflake). */
-    private requireGuildAccess(req: express.Request, res: express.Response): boolean {
+    /** Express 5 may type route params as `string | string[]`. */
+    private soloRouteParam(req: express.Request, key: string): string | undefined {
+        const raw = req.params[key];
+        return typeof raw === 'string' ? raw : Array.isArray(raw) ? raw[0] : undefined;
+    }
+
+    /** `:id` Discord guild snowflake on `/api/v1/guilds/:id/*`. */
+    private guildRouteParam(req: express.Request, res: express.Response): string | null {
+        const id = this.soloRouteParam(req, 'id');
+        if (!id) {
+            res.status(400).json({ error: 'Invalid guild id' });
+            return null;
+        }
+        return id;
+    }
+
+    /** Require Bearer JWT listing this Discord guild in `eligibleGuildIds` (or legacy single `guildId`). */
+    private requireGuildAccess(req: express.Request, res: express.Response, discordGuildId: string): boolean {
         try {
             const authHeader = req.headers.authorization;
             if (!authHeader?.startsWith('Bearer ')) {
@@ -22,8 +78,9 @@ export class AdminAPI {
             }
             const token = authHeader.split(' ')[1];
             const secret = process.env.JWT_SECRET || 'super_secret_jwt_key';
-            const decoded = jwt.verify(token, secret) as { guildId?: string };
-            if (!decoded.guildId || decoded.guildId !== req.params.id) {
+            const decoded = jwt.verify(token, secret) as DashboardJwtPayload;
+            const eligible = jwtEligibleDiscordGuilds(decoded);
+            if (!eligible.length || !eligible.includes(discordGuildId)) {
                 res.status(403).json({ error: 'Token guild does not match requested guild' });
                 return false;
             }
@@ -93,35 +150,43 @@ export class AdminAPI {
                     headers: { Authorization: `Bearer ${access_token}` }
                 });
 
-                const userGuilds = guildsResponse.data;
+                const userGuilds = guildsResponse.data as Array<{ id: string; permissions: string }>;
                 const dbGuilds = await prisma.guild.findMany({
-                    where: { discordId: { in: userGuilds.map((g: any) => g.id) } }
+                    where: { discordId: { in: userGuilds.map((g) => g.id) } }
                 });
 
-                // Pick the first guild that exists in our DB and user has permissions for (optional: check permissions bitwise)
-                // MANAGE_GUILD permission is 0x20
-                const authorizedGuild = userGuilds.find((ug: any) => 
-                    dbGuilds.some(dg => dg.discordId === ug.id) && 
-                    (BigInt(ug.permissions) & BigInt(0x20)) === BigInt(0x20)
-                );
+                const dbDiscordIds = new Set(dbGuilds.map(dg => dg.discordId));
+                const eligibleGuildIds = discordGuildsEligibleForJwt(userGuilds, dbDiscordIds);
+                const dashboardBase = (process.env.DASHBOARD_URL || '').replace(/\/$/, '');
 
-                const resolvedGuildId = authorizedGuild ? authorizedGuild.id : (req.query.guild_id as string);
+                if (!eligibleGuildIds.length) {
+                    console.warn(`[Auth] User ${userResponse.data.username} has no guild with Manage Server/admin in linked SuperBot servers.`);
+                    return res.redirect(`${dashboardBase}?auth_error=no_eligible_guild`);
+                }
 
-                // 4. Issue JWT to frontend
+                const rawGid = req.query.guild_id;
+                const preferredDiscordId =
+                    typeof rawGid === 'string' ? rawGid : Array.isArray(rawGid) ? rawGid[0] : undefined;
+                const primaryGuildId =
+                    typeof preferredDiscordId === 'string' && eligibleGuildIds.includes(preferredDiscordId)
+                        ? preferredDiscordId
+                        : eligibleGuildIds[0];
+
+                // 4. Issue JWT (never omit guild scope — avoids blank dashboard after middleware tightened)
                 const jwtToken = jwt.sign(
-                    { 
-                        id: userResponse.data.id, 
+                    {
+                        id: userResponse.data.id,
                         username: userResponse.data.username,
-                        guildId: resolvedGuildId // Auto-resolved guild
+                        guildId: primaryGuildId,
+                        eligibleGuildIds,
                     },
                     process.env.JWT_SECRET || 'super_secret_jwt_key',
-                    { expiresIn: '1d' }
+                    { expiresIn: '1d' },
                 );
 
-                console.log(`[Auth] User ${userResponse.data.username} logged in. Resolved Guild: ${resolvedGuildId}`);
+                console.log(`[Auth] User ${userResponse.data.username} logged in. Guilds: ${eligibleGuildIds.join(', ')}`);
 
-                // Redirect back to frontend with token
-                res.redirect(`${process.env.DASHBOARD_URL}?token=${jwtToken}`);
+                res.redirect(`${dashboardBase}?token=${jwtToken}`);
             } catch (error) {
                 console.error('[Auth] Discord OAuth Error:', error);
                 res.status(500).send('Authentication failed');
@@ -134,18 +199,38 @@ export class AdminAPI {
                 const authHeader = req.headers.authorization;
                 if (!authHeader) return res.status(401).json({ error: 'No token' });
                 const token = authHeader.split(' ')[1];
-                const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super_secret_jwt_key') as { id: string, username: string, guildId: string };
-                res.json({ guildId: decoded.guildId, id: decoded.id, username: decoded.username });
+                const decoded = jwt.verify(
+                    token,
+                    process.env.JWT_SECRET || 'super_secret_jwt_key',
+                ) as DashboardJwtPayload;
+                const eligible = jwtEligibleDiscordGuilds(decoded);
+                if (!eligible.length) {
+                    return res.status(401).json({ error: 'Token missing guild scope; sign in again.' });
+                }
+                const guildId =
+                    decoded.guildId && eligible.includes(decoded.guildId) ? decoded.guildId : eligible[0];
+                res.json({
+                    guildId,
+                    eligibleGuildIds: eligible,
+                    id: decoded.id,
+                    username: decoded.username,
+                });
             } catch (error) {
                 res.status(401).json({ error: 'Invalid token' });
             }
         });
 
+        // 2.6 Stateless logout — dashboard clears client storage (no session store today)
+        this.app.post('/api/v1/auth/logout', (_req, res) => {
+            res.status(204).send();
+        });
+
         // 3. Get Guild Alert Channels
         this.app.get('/api/v1/guilds/:id/rules', async (req, res) => {
-            if (!this.requireGuildAccess(req, res)) return;
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
-                const discordGuildId = req.params.id;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
                 if (!guild) return res.json({ rules: [] });
 
@@ -167,9 +252,10 @@ export class AdminAPI {
 
         // 4. Add a tracked wallet via API
         this.app.post('/api/v1/guilds/:id/wallets', async (req, res) => {
-            if (!this.requireGuildAccess(req, res)) return;
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
-                const discordGuildId = req.params.id;
                 const { address, label, alertChannelId } = req.body;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
                 if (!guild) return res.status(404).json({ error: 'Guild not found' });
@@ -187,9 +273,10 @@ export class AdminAPI {
 
         // 5. Get tracked wallets
         this.app.get('/api/v1/guilds/:id/wallets', async (req, res) => {
-            if (!this.requireGuildAccess(req, res)) return;
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
-                const discordGuildId = req.params.id;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
                 if (!guild) return res.json({ wallets: [] });
                 const wallets = await prisma.trackedWallet.findMany({ where: { guildId: guild.id } });
@@ -201,14 +288,17 @@ export class AdminAPI {
 
         // 5b. Delete a tracked wallet
         this.app.delete('/api/v1/guilds/:id/wallets/:walletId', async (req, res) => {
-            if (!this.requireGuildAccess(req, res)) return;
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
-                const discordGuildId = req.params.id;
+                const walletId = this.soloRouteParam(req, 'walletId');
+                if (!walletId) return res.status(400).json({ error: 'Invalid wallet id' });
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
                 if (!guild) return res.status(404).json({ error: 'Guild not found' });
 
                 await prisma.trackedWallet.deleteMany({
-                    where: { id: req.params.walletId, guildId: guild.id }
+                    where: { id: walletId, guildId: guild.id }
                 });
                 res.json({ success: true });
             } catch (error) {
@@ -218,9 +308,10 @@ export class AdminAPI {
 
         // 6. Get tracked collections
         this.app.get('/api/v1/guilds/:id/collections', async (req, res) => {
-            if (!this.requireGuildAccess(req, res)) return;
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
-                const discordGuildId = req.params.id;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
                 if (!guild) return res.json({ collections: [] });
                 const collections = await prisma.trackedCollection.findMany({ where: { guildId: guild.id } });
@@ -232,9 +323,10 @@ export class AdminAPI {
 
         // 6b. Add a tracked collection
         this.app.post('/api/v1/guilds/:id/collections', async (req, res) => {
-            if (!this.requireGuildAccess(req, res)) return;
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
-                const discordGuildId = req.params.id;
                 const { contract, name, floorAlertPct, alertChannelId } = req.body;
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
                 if (!guild) return res.status(404).json({ error: 'Guild not found' });
@@ -252,14 +344,17 @@ export class AdminAPI {
 
         // 7. Delete a tracked collection
         this.app.delete('/api/v1/guilds/:id/collections/:collectionId', async (req, res) => {
-            if (!this.requireGuildAccess(req, res)) return;
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
-                const discordGuildId = req.params.id;
+                const collectionId = this.soloRouteParam(req, 'collectionId');
+                if (!collectionId) return res.status(400).json({ error: 'Invalid collection id' });
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
                 if (!guild) return res.status(404).json({ error: 'Guild not found' });
 
                 await prisma.trackedCollection.deleteMany({
-                    where: { id: req.params.collectionId, guildId: guild.id }
+                    where: { id: collectionId, guildId: guild.id }
                 });
                 res.json({ success: true });
             } catch (error) {
@@ -269,10 +364,12 @@ export class AdminAPI {
 
         // 8. Guild status summary
         this.app.get('/api/v1/guilds/:id/status', async (req, res) => {
-            if (!this.requireGuildAccess(req, res)) return;
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
                 const guild = await prisma.guild.findUnique({
-                    where: { discordId: req.params.id },
+                    where: { discordId: discordGuildId },
                     include: { alertChannels: true, trackedWallets: true, trackedCollections: true }
                 });
                 if (!guild) return res.status(404).json({ error: 'Guild not found' });
