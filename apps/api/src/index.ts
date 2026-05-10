@@ -144,6 +144,40 @@ const GIT_SHA =
     process.env.SOURCE_COMMIT ||
     'unknown';
 
+/**
+ * HTTPS origin of this API as seen by browsers (no path, no trailing slash).
+ * Used for Discord OAuth redirect_uri. Prefer PUBLIC_API_URL; VITE_API_URL is a legacy alias
+ * shared with the dashboard build; on Railway, RAILWAY_PUBLIC_DOMAIN is a last-resort fallback.
+ */
+function normalizePublicApiOrigin(): string | null {
+    const explicit = (process.env.PUBLIC_API_URL || process.env.VITE_API_URL || '').trim();
+    const railwayDomain = (process.env.RAILWAY_PUBLIC_DOMAIN || '').trim();
+    let raw = explicit;
+    if (!raw && railwayDomain) {
+        raw = `https://${railwayDomain}`;
+    }
+    if (!raw) {
+        console.error(
+            '[Auth] OAuth misconfigured: set PUBLIC_API_URL (or VITE_API_URL) to the public API origin (https://host, no trailing path).',
+        );
+        return null;
+    }
+    raw = raw.replace(/\/+$/, '');
+    if (/^http:\/\//i.test(raw)) {
+        raw = `https://${raw.slice('http://'.length)}`;
+    }
+    if (!/^https:\/\//i.test(raw)) {
+        raw = `https://${raw.replace(/^\/+/, '')}`;
+    }
+    return raw.replace(/\/+$/, '');
+}
+
+function discordOAuthRedirectUri(): string | null {
+    const origin = normalizePublicApiOrigin();
+    if (!origin) return null;
+    return `${origin}/api/v1/auth/discord/callback`;
+}
+
 export class AdminAPI {
     private app = express();
     private port = Number(process.env.PORT) || 3000;
@@ -245,15 +279,26 @@ export class AdminAPI {
         });
 
         // 2. Discord OAuth Login Redirect
-        this.app.get('/api/v1/auth/discord', (req, res) => {
-            const clientId = process.env.DISCORD_CLIENT_ID;
-            const apiUrl = (process.env.VITE_API_URL || '').replace(/\/$/, '');
-            const redirectUri = encodeURIComponent(`${apiUrl}/api/v1/auth/discord/callback`);
-            const scope = 'identify guilds';
-            const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${clientId}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}`;
-            console.log(`[Auth] Redirecting to Discord with URI: ${apiUrl}/api/v1/auth/discord/callback`);
+        const discordOAuthStart = (_req: express.Request, res: express.Response) => {
+            const clientId = process.env.DISCORD_CLIENT_ID?.trim();
+            if (!clientId) {
+                console.error('[Auth] DISCORD_CLIENT_ID is not set');
+                return res.status(503).json({ error: 'OAuth not configured', code: 'OAUTH_NOT_CONFIGURED', status: 503 });
+            }
+            const redirectUriFull = discordOAuthRedirectUri();
+            if (!redirectUriFull) {
+                return res.status(503).json({ error: 'OAuth not configured', code: 'OAUTH_NOT_CONFIGURED', status: 503 });
+            }
+            const redirectUri = encodeURIComponent(redirectUriFull);
+            const scope = encodeURIComponent('identify guilds');
+            const authUrl = `https://discord.com/api/oauth2/authorize?client_id=${encodeURIComponent(
+                clientId,
+            )}&redirect_uri=${redirectUri}&response_type=code&scope=${scope}`;
+            console.log(`[Auth] Redirecting to Discord redirect_uri=${redirectUriFull}`);
             res.redirect(authUrl);
-        });
+        };
+        this.app.get('/api/v1/auth/discord', discordOAuthStart);
+        this.app.get('/api/v1/auth/discord/login', discordOAuthStart);
 
         // 3. Discord OAuth Callback
         this.app.get('/api/v1/auth/discord/callback', async (req, res) => {
@@ -261,14 +306,17 @@ export class AdminAPI {
             if (!code) return res.status(400).send('No code provided');
 
             try {
-                const apiUrl = (process.env.VITE_API_URL || '').replace(/\/$/, '');
+                const redirectUriFull = discordOAuthRedirectUri();
+                if (!redirectUriFull) {
+                    return res.status(503).send('Authentication service misconfigured');
+                }
                 // 1. Exchange code for token
                 const tokenResponse = await axios.post('https://discord.com/api/oauth2/token', new URLSearchParams({
                     client_id: process.env.DISCORD_CLIENT_ID!,
                     client_secret: process.env.DISCORD_CLIENT_SECRET!,
                     grant_type: 'authorization_code',
                     code,
-                    redirect_uri: `${apiUrl}/api/v1/auth/discord/callback`
+                    redirect_uri: redirectUriFull,
                 }).toString(), {
                     headers: { 'Content-Type': 'application/x-www-form-urlencoded' }
                 });
