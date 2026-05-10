@@ -12,6 +12,9 @@ export const links = {
         nft: (contract: string, tokenId: string) =>
             `https://opensea.io/assets/ethereum/${normContract(contract)}/${encodeURIComponent(tokenId)}`,
         collection: (slug: string) => `https://opensea.io/collection/${encodeURIComponent(slug)}`,
+        /** Contract-scoped assets view when collection slug is unknown (Ethereum mainnet). */
+        collectionByContract: (contract: string) =>
+            `https://opensea.io/assets/ethereum/${normContract(contract)}`,
         wallet: (addressOrEns: string) => `https://opensea.io/${addressOrEns}`,
     },
     etherscan: {

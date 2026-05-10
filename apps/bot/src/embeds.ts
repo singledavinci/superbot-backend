@@ -425,8 +425,10 @@ export function createMassListingEmbed(data: {
     chain: string;
     listingCount: number;
     windowMs: number;
+    collectionMeta?: CollectionMetadata | null;
 }) {
     const mins = Math.round(data.windowMs / 60000) || 1;
+    const slug = data.collectionMeta?.slug?.trim() || null;
     return new EmbedBuilder()
         .setColor('#38bdf8')
         .setTitle('📣 Listing surge')
@@ -436,7 +438,7 @@ export function createMassListingEmbed(data: {
             { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: true },
             { name: 'Chain', value: data.chain, inline: true },
             { name: 'New listings (window)', value: `${data.listingCount} / ~${mins} min`, inline: false },
-            { name: 'Links', value: markdownCollectionToolkit(data.contract, null), inline: false },
+            { name: 'Links', value: markdownCollectionToolkit(data.contract, slug), inline: false },
         )
         .setTimestamp()
         .setFooter({ text: 'SuperBot Market Intelligence • Not financial advice' });
@@ -491,13 +493,13 @@ export function createFloorUpdateEmbed(data: {
     return embed;
 }
 
-/** Markdown: OpenSea (collection page when slug known) · CatchMint · Etherscan token contract. */
+/** Markdown: OpenSea (slug collection page, else contract assets URL) · CatchMint · Etherscan token. */
 export function markdownCollectionToolkit(contract: string, slug?: string | null): string {
     const parts: string[] = [];
     const s = typeof slug === 'string' ? slug.trim() : '';
-    if (s) {
-        parts.push(`[OpenSea](${links.opensea.collection(s)})`);
-    }
+    parts.push(
+        `[OpenSea](${s ? links.opensea.collection(s) : links.opensea.collectionByContract(contract)})`,
+    );
     parts.push(`[CatchMint](${links.catchmint.collection(contract)})`);
     parts.push(`[Etherscan](${links.etherscan.token(contract)})`);
     return parts.join(' · ');

@@ -1,7 +1,12 @@
 import * as dotenv from 'dotenv';
 import { discordQueue, redisConnection } from '@superbot/queue';
 import { prisma } from '@superbot/database';
-import { MassListingDetector, OpenSeaSalesClient, SalesProvider } from '@superbot/analytics';
+import {
+    MassListingDetector,
+    NFTMetadataClient,
+    OpenSeaSalesClient,
+    SalesProvider,
+} from '@superbot/analytics';
 
 dotenv.config();
 
@@ -14,6 +19,8 @@ dotenv.config();
 export class MarketIndexer {
     private provider: SalesProvider | null = null;
     private detector = new MassListingDetector();
+    /** Same collection enrichment pattern as EventWorker sweep/cluster alerts */
+    private nftMetadata = new NFTMetadataClient({ redis: redisConnection });
     private pollIntervalMs = Number(process.env.MARKET_POLL_INTERVAL_MS) || 60_000;
     private timer: NodeJS.Timeout | null = null;
     private listingCursorByContract = new Map<string, string>();
@@ -145,6 +152,11 @@ export class MarketIndexer {
             },
         });
 
+        const collectionMeta =
+            rows.length === 0
+                ? null
+                : await this.nftMetadata.fetchCollection(det.contract).catch(() => null);
+
         for (const row of rows) {
             const minListings = row.massListingThreshold ?? defaultMin;
             if (det.count < minListings) continue;
@@ -160,7 +172,8 @@ export class MarketIndexer {
                     alertType: 'MASS_LISTING',
                     contract: det.contract,
                     chain: det.chain,
-                    collectionName: row.name,
+                    collectionName: collectionMeta?.name ?? row.name,
+                    collectionMeta,
                     listingCount: det.count,
                     windowMs: det.windowMs,
                     mentionRoleId: row.mentionRoleId,

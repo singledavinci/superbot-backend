@@ -37,17 +37,13 @@ function nftMarketplaceButtons(contract: string, tokenId: string): ButtonBuilder
 }
 
 function collectionMarketplaceButtons(contract: string, collectionSlug?: string | null): ButtonBuilder[] {
-    const buttons: ButtonBuilder[] = [];
     const slug = typeof collectionSlug === 'string' ? collectionSlug.trim() : '';
-    if (slug) {
-        buttons.push(
-            new ButtonBuilder()
-                .setLabel('OpenSea')
-                .setStyle(ButtonStyle.Link)
-                .setURL(links.opensea.collection(slug)),
-        );
-    }
-    buttons.push(
+    const openSeaUrl = slug ? links.opensea.collection(slug) : links.opensea.collectionByContract(contract);
+    return [
+        new ButtonBuilder()
+            .setLabel('OpenSea')
+            .setStyle(ButtonStyle.Link)
+            .setURL(openSeaUrl),
         new ButtonBuilder()
             .setLabel('CatchMint')
             .setStyle(ButtonStyle.Link)
@@ -56,8 +52,7 @@ function collectionMarketplaceButtons(contract: string, collectionSlug?: string 
             .setLabel('Etherscan')
             .setStyle(ButtonStyle.Link)
             .setURL(links.etherscan.token(contract)),
-    );
-    return buttons;
+    ];
 }
 
 export class SuperBot {
@@ -342,9 +337,17 @@ export class SuperBot {
                     allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
                 });
             } else if (alertType === 'MASS_LISTING') {
-                const embed = createMassListingEmbed(data);
+                const massSlug = data.collectionMeta?.slug ?? null;
+                const embed = createMassListingEmbed({
+                    collectionName: data.collectionName,
+                    contract: data.contract,
+                    chain: data.chain,
+                    listingCount: data.listingCount,
+                    windowMs: data.windowMs,
+                    collectionMeta: data.collectionMeta ?? null,
+                });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
-                    ...collectionMarketplaceButtons(data.contract, null),
+                    ...collectionMarketplaceButtons(data.contract, massSlug),
                 );
                 await channel.send({
                     content,
