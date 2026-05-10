@@ -13,6 +13,7 @@
     "start:indexer": "SERVICE_TYPE=indexer node dist/src/index.js",
     "start:worker": "SERVICE_TYPE=worker node dist/src/index.js",
     "start:api": "SERVICE_TYPE=api node dist/src/index.js",
+    "start:market-indexer": "SERVICE_TYPE=market-indexer node dist/src/index.js",
     "build": "prisma generate --schema=packages/database/prisma/schema.prisma && tsc",
     "test": "echo \"Error: no test specified\" && exit 1"
   },

@@ -35,9 +35,51 @@ export interface FetchSalesResult {
     nextCursor?: string;
 }
 
+/** Normalized marketplace listing / order-placed event (OpenSea v2, etc.). */
+export interface NormalizedListing {
+    eventId: string;
+    chain: string;
+    contract: string;
+    tokenId?: string;
+    timestamp: number;
+    /** Listing side (seller / maker). */
+    maker?: string;
+    priceNative: number;
+    currency: string;
+    marketplace?: string;
+    raw: unknown;
+}
+
+export interface FetchListingsArgs {
+    contract: string;
+    chain?: string;
+    cursor?: string;
+    limit?: number;
+}
+
+export interface FetchListingsResult {
+    listings: NormalizedListing[];
+    nextCursor?: string;
+}
+
+export interface FetchFloorArgs {
+    contract: string;
+    chain?: string;
+}
+
+export interface FetchFloorResult {
+    priceNative: number;
+    currency: string;
+    source: string;
+}
+
 export interface SalesProvider {
     /** Short human label, used in logs and the `/status` command. */
     readonly name: string;
     isConfigured(): boolean;
     fetchSales(args: FetchSalesArgs): Promise<FetchSalesResult>;
+    /** OpenSea-backed deployments populate this; others return an empty page. */
+    fetchListings(args: FetchListingsArgs): Promise<FetchListingsResult>;
+    /** Best effort floor for the contract; returns null when unavailable. */
+    fetchFloor(args: FetchFloorArgs): Promise<FetchFloorResult | null>;
 }

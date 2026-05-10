@@ -52,10 +52,16 @@ async function start() {
                 await worker.start();
                 break;
             case 'sales-indexer':
-                console.log('💱 Loading Reservoir Sales Indexer Service...');
+                console.log('💱 Loading Sales Indexer Service...');
                 const { SalesIndexer } = await import('../apps/sales-indexer/src/index');
                 const salesIndexer = new SalesIndexer();
                 await salesIndexer.start();
+                break;
+            case 'market-indexer':
+                console.log('📊 Loading Market Indexer Service...');
+                const { MarketIndexer } = await import('../apps/market-indexer/src/index');
+                const marketIndexer = new MarketIndexer();
+                await marketIndexer.start();
                 break;
             default:
                 console.log('⚡ No SERVICE_TYPE specified. Running in MONOLITH mode (All services in one process)...');

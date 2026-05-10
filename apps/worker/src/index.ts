@@ -1,7 +1,13 @@
 import { Worker, Job } from 'bullmq';
 import { redisConnection, discordQueue as discordDeliveryQueue } from '@superbot/queue';
 import { prisma } from '@superbot/database';
-import { clickhouse, SmartMoneyProfiler } from '@superbot/analytics';
+import {
+    clickhouse,
+    SmartMoneyProfiler,
+    SweepDetector,
+    type NormalizedSale,
+    type SweepDetection,
+} from '@superbot/analytics';
 import { SniperEngine } from '@superbot/utils';
 import { ContextEngine, SaleDetector } from '@superbot/intelligence';
 import { ethers, JsonRpcProvider } from 'ethers';
@@ -29,6 +35,7 @@ export class EventWorker {
     private snipers = new Map<string, SniperEngine>();
     private profiler = new SmartMoneyProfiler();
     private contextEngine = new ContextEngine();
+    private sweepDetector = new SweepDetector();
     private saleDetectors = new Map<string, SaleDetector>();
     private providers = new Map<string, JsonRpcProvider>();
     private profileCache = new Map<string, { profile: any, timestamp: number }>();
@@ -56,7 +63,7 @@ export class EventWorker {
 
             // Indexer emits 'erc721_transfer' or 'erc1155_transfer'; treat both as transfers.
             if (type === 'erc721_transfer' || type === 'erc1155_transfer' || type === 'transfer') {
-                await this.handleTransfer(chain, contract, from, to, tokenId, txHash, eventId);
+                await this.handleTransfer(chain, contract, from, to, tokenId, txHash, eventId, job.data);
 
                 // Detect mint surges for trending mint radar
                 if (from === '0x0000000000000000000000000000000000000000') {
@@ -75,23 +82,65 @@ export class EventWorker {
         });
     }
 
-    private async handleTransfer(chain: string, contract: string, from: string, to: string, tokenId: string, txHash: string, eventId: string) {
-        // 2. Server-wide Tracking (Alerts)
+    private async handleTransfer(
+        chain: string,
+        contract: string,
+        from: string,
+        to: string,
+        tokenId: string,
+        txHash: string,
+        eventId: string,
+        rawJob: Record<string, unknown>,
+    ) {
+        const jobPriceNative =
+            typeof rawJob.priceNative === 'number'
+                ? rawJob.priceNative
+                : rawJob.priceNative != null
+                  ? Number(rawJob.priceNative)
+                  : undefined;
+        const jobCurrency = typeof rawJob.currency === 'string' ? rawJob.currency : undefined;
+        const jobMarketplace = typeof rawJob.marketplace === 'string' ? rawJob.marketplace : undefined;
+        const jobTs =
+            typeof rawJob.timestamp === 'number'
+                ? rawJob.timestamp
+                : rawJob.timestamp != null
+                  ? Number(rawJob.timestamp)
+                  : undefined;
+        const jobBlock =
+            typeof rawJob.blockNumber === 'number'
+                ? rawJob.blockNumber
+                : rawJob.blockNumber != null
+                  ? Number(rawJob.blockNumber)
+                  : undefined;
+
+        const trackedCollections = await prisma.trackedCollection.findMany({
+            where: {
+                chain: 'ethereum',
+                contractAddress: { equals: contract, mode: 'insensitive' },
+            },
+        });
+
         const trackedBuyers = await prisma.trackedWallet.findMany({
-            where: { address: { equals: to, mode: 'insensitive' } }
+            where: { address: { equals: to, mode: 'insensitive' } },
         });
 
         const trackedSellers = await prisma.trackedWallet.findMany({
-            where: { address: { equals: from, mode: 'insensitive' } }
+            where: { address: { equals: from, mode: 'insensitive' } },
         });
 
-        if (trackedBuyers.length === 0 && trackedSellers.length === 0) return;
+        if (
+            trackedCollections.length === 0 &&
+            trackedBuyers.length === 0 &&
+            trackedSellers.length === 0
+        ) {
+            return;
+        }
 
         // Detect Event Type: MINT, SALE, or TRANSFER
         let eventType = 'TRANSFER';
         let price = '0';
-        let currency = 'ETH';
-        let marketplace = '';
+        let currency = jobCurrency || 'ETH';
+        let marketplace = jobMarketplace || '';
 
         if (from === '0x0000000000000000000000000000000000000000') {
             eventType = 'MINT';
@@ -106,6 +155,39 @@ export class EventWorker {
                     marketplace = saleInfo.marketplace || 'Unknown';
                 }
             }
+        }
+
+        const effectivePriceEth =
+            parseFloat(price) > 0 ? parseFloat(price) : jobPriceNative && jobPriceNative > 0 ? jobPriceNative : 0;
+
+        if (effectivePriceEth > 0 && from !== '0x0000000000000000000000000000000000000000') {
+            const normalized: NormalizedSale = {
+                eventId: eventId || `${txHash}:${tokenId}`,
+                chain: chain || 'ethereum',
+                contract: contract.toLowerCase(),
+                tokenId,
+                txHash,
+                blockNumber: jobBlock,
+                timestamp: jobTs && jobTs > 0 ? jobTs : Math.floor(Date.now() / 1000),
+                buyer: to.toLowerCase(),
+                seller: from.toLowerCase(),
+                priceNative: effectivePriceEth,
+                currency,
+                marketplace: marketplace || jobMarketplace || 'unknown',
+                raw: rawJob,
+            };
+
+            const sweep = this.sweepDetector.ingest(normalized);
+            if (sweep && trackedCollections.length > 0) {
+                await this.dispatchSweep(sweep, trackedCollections);
+            }
+        }
+
+        if (trackedBuyers.length === 0 && trackedSellers.length === 0) return;
+
+        if (from !== '0x0000000000000000000000000000000000000000' && eventType !== 'SALE' && effectivePriceEth > 0) {
+            eventType = 'SALE';
+            price = String(effectivePriceEth);
         }
 
         // 3. Analytics Persistence (ClickHouse)
@@ -168,6 +250,49 @@ export class EventWorker {
                     }
                 }
             }
+        }
+    }
+
+    private async dispatchSweep(
+        sweep: SweepDetection,
+        collections: {
+            id: string;
+            alertChannelId: string | null;
+            mentionRoleId: string | null;
+            name: string;
+            sweepThresholdNative: number | null;
+        }[],
+    ) {
+        const envMinTotal = Number(process.env.SWEEP_MIN_TOTAL_NATIVE) || 0.5;
+
+        for (const row of collections) {
+            const minTotal = row.sweepThresholdNative ?? envMinTotal;
+            if (sweep.totalNative < minTotal) continue;
+            if (!row.alertChannelId) continue;
+
+            await discordDeliveryQueue.add(
+                'discord_alert',
+                {
+                    eventId: sweep.eventId,
+                    channelId: row.alertChannelId,
+                    alertType: 'SWEEP',
+                    contract: sweep.contract,
+                    chain: sweep.chain,
+                    collectionName: row.name,
+                    buyer: sweep.buyer,
+                    txHash: sweep.txHash,
+                    itemCount: sweep.itemCount,
+                    totalNative: sweep.totalNative,
+                    currency: sweep.currency,
+                    tokenIds: sweep.tokenIds,
+                    mentionRoleId: row.mentionRoleId,
+                },
+                {
+                    jobId: `sweep-${row.id}-${sweep.eventId}`,
+                    removeOnComplete: { age: 3600 },
+                    removeOnFail: { age: 86400 },
+                },
+            );
         }
     }
 

@@ -1,5 +1,9 @@
 import axios from 'axios';
 import {
+    FetchFloorArgs,
+    FetchFloorResult,
+    FetchListingsArgs,
+    FetchListingsResult,
     FetchSalesArgs,
     FetchSalesResult,
     NormalizedSale,
@@ -106,6 +110,14 @@ export class ReservoirSalesClient implements SalesProvider {
             console.error(`[ReservoirSalesClient] sales/v6 failed for ${args.contract} (${chain}): ${message}`);
             return { sales: [], nextCursor: args.cursor };
         }
+    }
+
+    public async fetchListings(_args: FetchListingsArgs): Promise<FetchListingsResult> {
+        return { listings: [] };
+    }
+
+    public async fetchFloor(_args: FetchFloorArgs): Promise<FetchFloorResult | null> {
+        return null;
     }
 
     private normalize(sale: ReservoirSalesResponse['sales'][number], chain: string): NormalizedSale | null {

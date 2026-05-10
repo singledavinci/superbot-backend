@@ -72,17 +72,20 @@ model TrackedWallet {
 }
 
 model TrackedCollection {
-  id               String    @id @default(uuid())
-  guildId          String
-  contractAddress  String
-  name             String
-  chain            String    @default("ethereum")
-  floorAlertPct    Float?                // Alert when floor drops by this %
-  alertChannelId   String?               // Discord channel ID (string, not FK)
-  mentionRoleId    String?               // Discord Role ID to ping
-  guild            Guild     @relation(fields: [guildId], references: [id])
-  createdAt        DateTime  @default(now())
-  updatedAt        DateTime  @updatedAt
+  id                      String    @id @default(uuid())
+  guildId                 String
+  contractAddress         String
+  name                    String
+  chain                   String    @default("ethereum")
+  floorAlertPct           Float?                // Alert when floor drops by this %
+  floorRiseAlertPct       Float?                // Alert when floor rises by this %
+  sweepThresholdNative    Float?                // Min total ETH (native) for sweep alerts
+  massListingThreshold    Int?                  // Min listings in window for surge alerts
+  alertChannelId          String?               // Discord channel ID (string, not FK)
+  mentionRoleId           String?               // Discord Role ID to ping
+  guild                   Guild     @relation(fields: [guildId], references: [id])
+  createdAt               DateTime  @default(now())
+  updatedAt               DateTime  @updatedAt
 
   @@unique([contractAddress, guildId])
 }

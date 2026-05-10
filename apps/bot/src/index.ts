@@ -5,7 +5,14 @@ import path from 'path';
 import { Worker, Job } from 'bullmq';
 import { redisConnection } from '@superbot/queue';
 import { prisma } from '@superbot/database';
-import { createWhaleBuyEmbed, createMintAlertEmbed, createFloorUpdateEmbed } from './embeds';
+import {
+    createWhaleBuyEmbed,
+    createMintAlertEmbed,
+    createFloorUpdateEmbed,
+    createSweepEmbed,
+    createMassListingEmbed,
+    createFloorMovementEmbed,
+} from './embeds';
 
 dotenv.config();
 
@@ -127,6 +134,53 @@ export class SuperBot {
                     content, 
                     embeds: [embed],
                     allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] }
+                });
+            } else if (alertType === 'SWEEP') {
+                const embed = createSweepEmbed(data);
+                const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    new ButtonBuilder()
+                        .setLabel('Transaction')
+                        .setStyle(ButtonStyle.Link)
+                        .setURL(`https://etherscan.io/tx/${data.txHash}`),
+                    new ButtonBuilder()
+                        .setLabel('Collection')
+                        .setStyle(ButtonStyle.Link)
+                        .setURL(`https://blur.io/collection/${data.contract}`),
+                );
+                await channel.send({
+                    content,
+                    embeds: [embed],
+                    components: [row],
+                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                });
+            } else if (alertType === 'MASS_LISTING') {
+                const embed = createMassListingEmbed(data);
+                const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    new ButtonBuilder()
+                        .setLabel('Contract')
+                        .setStyle(ButtonStyle.Link)
+                        .setURL(`https://etherscan.io/address/${data.contract}`),
+                );
+                await channel.send({
+                    content,
+                    embeds: [embed],
+                    components: [row],
+                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                });
+            } else if (alertType === 'FLOOR_DROP' || alertType === 'FLOOR_RISE') {
+                const embed = createFloorMovementEmbed({
+                    collectionName: data.collectionName,
+                    contract: data.contract,
+                    floorPrice: data.floorPrice,
+                    prevFloor: data.prevFloor,
+                    pctChange: data.pctChange,
+                    currency: data.currency,
+                    direction: alertType === 'FLOOR_DROP' ? 'drop' : 'rise',
+                });
+                await channel.send({
+                    content,
+                    embeds: [embed],
+                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
                 });
             }
 

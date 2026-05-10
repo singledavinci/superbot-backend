@@ -21,6 +21,21 @@ export const data = new SlashCommandBuilder()
             .setDescription('Alert when floor drops by this % (e.g. 10 = 10%)')
             .setRequired(false)
     )
+    .addNumberOption(opt =>
+        opt.setName('floor-rise-pct')
+            .setDescription('Alert when floor rises by this % (pump signal)')
+            .setRequired(false)
+    )
+    .addNumberOption(opt =>
+        opt.setName('sweep-threshold')
+            .setDescription('Min total ETH spent in a sweep tx to alert (guild override)')
+            .setRequired(false)
+    )
+    .addIntegerOption(opt =>
+        opt.setName('mass-listing-threshold')
+            .setDescription('Min listing events in the surge window to alert')
+            .setRequired(false)
+    )
     .addStringOption(opt =>
         opt.setName('channel-id')
             .setDescription('Discord channel ID to route alerts to')
@@ -38,6 +53,9 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const contract    = interaction.options.getString('contract', true).toLowerCase().trim();
     const name        = interaction.options.getString('name', true).substring(0, 32);
     const floorAlert  = interaction.options.getNumber('floor-alert') ?? null;
+    const floorRisePct = interaction.options.getNumber('floor-rise-pct') ?? null;
+    const sweepThreshold = interaction.options.getNumber('sweep-threshold') ?? null;
+    const massListingThreshold = interaction.options.getInteger('mass-listing-threshold') ?? null;
     const channelId   = interaction.options.getString('channel-id') ?? null;
     const role        = interaction.options.getRole('mention-role');
     const guildId     = interaction.guildId!;
@@ -65,8 +83,26 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
         const collection = await prisma.trackedCollection.upsert({
             where:  { contractAddress_guildId: { contractAddress: contract, guildId: guild.id } },
-            create: { guildId: guild.id, contractAddress: contract, name, floorAlertPct: floorAlert, alertChannelId: targetChannelId, mentionRoleId: role?.id },
-            update: { name, floorAlertPct: floorAlert, alertChannelId: targetChannelId, mentionRoleId: role?.id },
+            create: {
+                guildId: guild.id,
+                contractAddress: contract,
+                name,
+                floorAlertPct: floorAlert,
+                floorRiseAlertPct: floorRisePct,
+                sweepThresholdNative: sweepThreshold,
+                massListingThreshold: massListingThreshold ?? undefined,
+                alertChannelId: targetChannelId,
+                mentionRoleId: role?.id,
+            },
+            update: {
+                name,
+                floorAlertPct: floorAlert,
+                floorRiseAlertPct: floorRisePct,
+                sweepThresholdNative: sweepThreshold,
+                massListingThreshold: massListingThreshold ?? undefined,
+                alertChannelId: targetChannelId,
+                mentionRoleId: role?.id,
+            },
         });
 
         const embed = new EmbedBuilder()
@@ -75,7 +111,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
             .addFields(
                 { name: 'Collection', value: name,              inline: true },
                 { name: 'Contract',   value: `\`${contract.slice(0, 12)}...\``, inline: true },
-                { name: 'Floor Alert', value: floorAlert ? `-${floorAlert}%` : 'Disabled', inline: true },
+                { name: 'Floor drop %', value: floorAlert != null ? `${floorAlert}%` : '—', inline: true },
+                { name: 'Floor rise %', value: floorRisePct != null ? `${floorRisePct}%` : '—', inline: true },
+                { name: 'Sweep min ΣETH', value: sweepThreshold != null ? String(sweepThreshold) : 'default', inline: true },
+                { name: 'Mass listings', value: massListingThreshold != null ? String(massListingThreshold) : 'default', inline: true },
                 { name: 'Alerts →',   value: `<#${targetChannelId}>`, inline: true },
                 { name: 'Ping Role', value: role ? `<@&${role.id}>` : '—', inline: true }
             )

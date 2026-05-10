@@ -76,6 +76,87 @@ export function createMintAlertEmbed(data: {
     return embed;
 }
 
+export function createSweepEmbed(data: {
+    collectionName: string;
+    contract: string;
+    chain: string;
+    buyer: string;
+    txHash: string;
+    itemCount: number;
+    totalNative: number;
+    currency: string;
+    tokenIds?: string[];
+}) {
+    const shortTokens =
+        data.tokenIds && data.tokenIds.length > 0
+            ? data.tokenIds.slice(0, 12).join(', ') + (data.tokenIds.length > 12 ? '…' : '')
+            : '—';
+
+    return new EmbedBuilder()
+        .setColor('#f97316')
+        .setTitle('🧹 Floor sweep detected')
+        .setDescription(`Multiple items bought in one transaction (possible floor sweep).`)
+        .addFields(
+            { name: 'Collection', value: data.collectionName, inline: true },
+            { name: 'Chain', value: data.chain, inline: true },
+            { name: 'Items', value: String(data.itemCount), inline: true },
+            { name: 'Total', value: `${data.totalNative.toFixed(4)} ${data.currency}`, inline: true },
+            { name: 'Buyer', value: `\`${data.buyer}\``, inline: false },
+            { name: 'Token IDs (sample)', value: shortTokens.slice(0, 900), inline: false },
+        )
+        .setTimestamp()
+        .setFooter({ text: 'SuperBot Market Intelligence • Not financial advice' });
+}
+
+export function createMassListingEmbed(data: {
+    collectionName: string;
+    contract: string;
+    chain: string;
+    listingCount: number;
+    windowMs: number;
+}) {
+    const mins = Math.round(data.windowMs / 60000) || 1;
+    return new EmbedBuilder()
+        .setColor('#38bdf8')
+        .setTitle('📣 Listing surge')
+        .setDescription(`Many new listings appeared in a short window.`)
+        .addFields(
+            { name: 'Collection', value: data.collectionName, inline: true },
+            { name: 'Contract', value: `\`${data.contract.slice(0, 10)}…\``, inline: true },
+            { name: 'Chain', value: data.chain, inline: true },
+            { name: 'New listings (window)', value: `${data.listingCount} / ~${mins} min`, inline: false },
+        )
+        .setTimestamp()
+        .setFooter({ text: 'SuperBot Market Intelligence • Not financial advice' });
+}
+
+export function createFloorMovementEmbed(data: {
+    collectionName: string;
+    contract: string;
+    floorPrice: number;
+    prevFloor: number;
+    pctChange: number;
+    currency: string;
+    direction: 'drop' | 'rise';
+}) {
+    const isDrop = data.direction === 'drop';
+    const title = isDrop ? '📉 Floor dropped' : '📈 Floor climbed';
+    const color = isDrop ? '#ef4444' : '#22c55e';
+
+    return new EmbedBuilder()
+        .setColor(color)
+        .setTitle(title)
+        .setDescription(`**${data.collectionName}**`)
+        .addFields(
+            { name: 'Floor now', value: `${data.floorPrice} ${data.currency}`, inline: true },
+            { name: 'Previous', value: `${data.prevFloor} ${data.currency}`, inline: true },
+            { name: 'Move', value: `${data.pctChange.toFixed(2)}%`, inline: true },
+            { name: 'Contract', value: `\`${data.contract.slice(0, 12)}…\``, inline: false },
+        )
+        .setTimestamp()
+        .setFooter({ text: 'SuperBot Market Data • Not financial advice' });
+}
+
 export function createFloorUpdateEmbed(data: {
     collectionName: string;
     contract: string;

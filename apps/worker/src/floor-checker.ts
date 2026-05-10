@@ -1,9 +1,22 @@
 import { prisma } from '@superbot/database';
 import { discordQueue as discordDeliveryQueue } from '@superbot/queue';
+import { redisConnection } from '@superbot/queue';
 import { FloorProvider } from '@superbot/analytics';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
+
+interface FloorRedisPayload {
+    priceNative: number;
+    currency: string;
+    source?: string;
+    ts?: number;
+}
+
+interface SnapshotPayload {
+    priceNative: number;
+    ts: number;
+}
 
 export class FloorWorker {
     private floorProvider = new FloorProvider();
@@ -12,8 +25,7 @@ export class FloorWorker {
 
     public async start() {
         console.log(`🕒 Floor Checker started. Polling every ${this.POLL_INTERVAL / 1000}s...`);
-        
-        // Immediate run
+
         await this.checkFloors();
 
         this.interval = setInterval(() => {
@@ -23,40 +35,122 @@ export class FloorWorker {
 
     private async checkFloors() {
         const tracked = await prisma.trackedCollection.findMany({
-            where: { floorAlertPct: { not: null } }
+            where: {
+                OR: [{ floorAlertPct: { not: null } }, { floorRiseAlertPct: { not: null } }],
+            },
         });
 
-        console.log(`[FloorWorker] Checking ${tracked.length} collections for floor changes...`);
+        console.log(`[FloorWorker] Checking ${tracked.length} collections for floor movement...`);
+
+        const hourBucket = Math.floor(Date.now() / 3600000);
 
         for (const item of tracked) {
             try {
-                const data = await this.floorProvider.getFloorPrice(item.contractAddress, item.chain);
-                if (!data) continue;
+                const chain = (item.chain || 'ethereum').toLowerCase();
+                if (chain !== 'ethereum') continue;
 
-                // Simple state tracking: we would ideally store last_floor in DB.
-                // For MVP, we check if there's a significant change. 
-                // We'll use a Cache/Redis to store 'last_reported_floor' to prevent spam.
-                
-                // Logic: If current floor != last floor, we might alert.
-                // But audit specifically asked for floorAlertPct.
-                
-                // Fetch previous known floor from DB (need to add a field or use a dedicated table)
-                // For now, we'll just send an alert if data is fetched and it's a 'recap'.
-                // Real threshold logic requires historical snapshots.
-                
-                if (item.alertChannelId) {
-                    await discordDeliveryQueue.add('discord_alert', {
-                        channelId: item.alertChannelId,
-                        alertType: 'FLOOR_UPDATE',
-                        contract: item.contractAddress,
-                        collectionName: data.collectionName,
-                        floorPrice: data.floorPrice,
-                        currency: data.currency,
-                        mentionRoleId: item.mentionRoleId
-                    }, {
-                        jobId: `floor-${item.id}-${Math.floor(Date.now() / 3600000)}` // Once per hour max
-                    });
+                const contract = item.contractAddress.toLowerCase();
+
+                let current: FloorRedisPayload | null = null;
+
+                const cached = await redisConnection.get(`floor:${chain}:${contract}`);
+                if (cached) {
+                    try {
+                        current = JSON.parse(cached) as FloorRedisPayload;
+                    } catch {
+                        current = null;
+                    }
                 }
+
+                if (!current || !current.priceNative || current.priceNative <= 0) {
+                    const data = await this.floorProvider.getFloorPrice(contract, chain);
+                    if (!data) continue;
+                    current = {
+                        priceNative: data.floorPrice,
+                        currency: data.currency,
+                        source: 'reservoir_fallback',
+                        ts: Date.now(),
+                    };
+                }
+
+                const snapRaw = await redisConnection.get(`floor_snapshot:${chain}:${contract}`);
+                let prev: SnapshotPayload | null = null;
+                if (snapRaw) {
+                    try {
+                        prev = JSON.parse(snapRaw) as SnapshotPayload;
+                    } catch {
+                        prev = null;
+                    }
+                }
+
+                if (prev && prev.priceNative > 0) {
+                    const dropPct = ((prev.priceNative - current.priceNative) / prev.priceNative) * 100;
+                    const risePct = ((current.priceNative - prev.priceNative) / prev.priceNative) * 100;
+
+                    if (
+                        item.floorAlertPct != null &&
+                        dropPct >= item.floorAlertPct &&
+                        item.alertChannelId
+                    ) {
+                        const eventId = `floor-drop:${contract}:${hourBucket}`;
+                        await discordDeliveryQueue.add(
+                            'discord_alert',
+                            {
+                                eventId,
+                                channelId: item.alertChannelId,
+                                alertType: 'FLOOR_DROP',
+                                contract,
+                                collectionName: item.name,
+                                floorPrice: current.priceNative,
+                                prevFloor: prev.priceNative,
+                                pctChange: dropPct,
+                                currency: current.currency,
+                                mentionRoleId: item.mentionRoleId,
+                            },
+                            {
+                                jobId: `floor-drop-${item.id}-${hourBucket}`,
+                                removeOnComplete: { age: 3600 },
+                                removeOnFail: { age: 86400 },
+                            },
+                        );
+                    }
+
+                    if (
+                        item.floorRiseAlertPct != null &&
+                        risePct >= item.floorRiseAlertPct &&
+                        item.alertChannelId
+                    ) {
+                        const eventId = `floor-rise:${contract}:${hourBucket}`;
+                        await discordDeliveryQueue.add(
+                            'discord_alert',
+                            {
+                                eventId,
+                                channelId: item.alertChannelId,
+                                alertType: 'FLOOR_RISE',
+                                contract,
+                                collectionName: item.name,
+                                floorPrice: current.priceNative,
+                                prevFloor: prev.priceNative,
+                                pctChange: risePct,
+                                currency: current.currency,
+                                mentionRoleId: item.mentionRoleId,
+                            },
+                            {
+                                jobId: `floor-rise-${item.id}-${hourBucket}`,
+                                removeOnComplete: { age: 3600 },
+                                removeOnFail: { age: 86400 },
+                            },
+                        );
+                    }
+                }
+
+                await redisConnection.set(
+                    `floor_snapshot:${chain}:${contract}`,
+                    JSON.stringify({
+                        priceNative: current.priceNative,
+                        ts: Date.now(),
+                    }),
+                );
             } catch (error) {
                 console.error(`[FloorWorker] Failed ${item.contractAddress}:`, error);
             }
