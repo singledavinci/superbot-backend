@@ -1,6 +1,26 @@
 import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits, EmbedBuilder } from 'discord.js';
 import { ethers } from 'ethers';
 import { prisma } from '@superbot/database';
+import { redisConnection } from '@superbot/queue';
+import {
+    NFTMetadataClient,
+    CollectionNameResolver,
+    createRpcPoolFromEnv,
+    isPlaceholderCollectionName,
+} from '@superbot/analytics';
+
+let trackCollectionResolver: CollectionNameResolver | null = null;
+function resolverForCommands(): CollectionNameResolver {
+    if (!trackCollectionResolver) {
+        const pool = createRpcPoolFromEnv();
+        trackCollectionResolver = new CollectionNameResolver({
+            redis: redisConnection,
+            nftMetadata: new NFTMetadataClient({ redis: redisConnection }),
+            rpcPool: pool && pool.httpsUrls.length > 0 ? pool : null,
+        });
+    }
+    return trackCollectionResolver;
+}
 
 export const data = new SlashCommandBuilder()
     .setName('track-collection')
@@ -63,7 +83,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     await interaction.deferReply({ ephemeral: true });
 
     const contract    = interaction.options.getString('contract', true).toLowerCase().trim();
-    const name        = interaction.options.getString('name', true).substring(0, 32);
+    const rawNameOpt  = interaction.options.getString('name', true).trim();
     const floorAlert  = interaction.options.getNumber('floor-alert') ?? null;
     const floorRisePct = interaction.options.getNumber('floor-rise-pct') ?? null;
     const sweepThreshold = interaction.options.getNumber('sweep-threshold') ?? null;
@@ -95,12 +115,28 @@ export async function execute(interaction: ChatInputCommandInteraction) {
             return interaction.editReply('❌ No alert channel found. Run `/setup` or provide a `channel-id`.');
         }
 
+        const existingTc = await prisma.trackedCollection.findUnique({
+            where: {
+                contractAddress_guildId: { contractAddress: contract, guildId: guild.id },
+            },
+            select: { name: true },
+        });
+
+        const persistedName =
+            !isPlaceholderCollectionName(rawNameOpt)
+                ? rawNameOpt.slice(0, 128)
+                : (
+                      await resolverForCommands().resolve(contract, {
+                          trackedName: existingTc?.name ?? undefined,
+                      })
+                  ).name.slice(0, 128);
+
         const collection = await prisma.trackedCollection.upsert({
             where:  { contractAddress_guildId: { contractAddress: contract, guildId: guild.id } },
             create: {
                 guildId: guild.id,
                 contractAddress: contract,
-                name,
+                name: persistedName,
                 floorAlertPct: floorAlert,
                 floorRiseAlertPct: floorRisePct,
                 sweepThresholdNative: sweepThreshold,
@@ -111,7 +147,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 mentionRoleId: role?.id,
             },
             update: {
-                name,
+                name: persistedName,
                 floorAlertPct: floorAlert,
                 floorRiseAlertPct: floorRisePct,
                 sweepThresholdNative: sweepThreshold,
@@ -127,7 +163,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
             .setColor('#a855f7')
             .setTitle('🖼️ Collection Now Tracked')
             .addFields(
-                { name: 'Collection', value: name,              inline: true },
+                { name: 'Collection', value: persistedName,              inline: true },
                 { name: 'Contract',   value: `\`${contract.slice(0, 12)}...\``, inline: true },
                 { name: 'Floor drop %', value: floorAlert != null ? `${floorAlert}%` : '—', inline: true },
                 { name: 'Floor rise %', value: floorRisePct != null ? `${floorRisePct}%` : '—', inline: true },

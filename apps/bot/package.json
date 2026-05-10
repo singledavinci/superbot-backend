@@ -8,6 +8,7 @@
     "build": "tsc"
   },
   "dependencies": {
+    "@superbot/analytics": "*",
     "@superbot/database": "*",
     "@superbot/types": "*",
     "@superbot/queue": "*",

@@ -7,6 +7,9 @@ import {
     NFTMetadataClient,
     OpenSeaSalesClient,
     SalesProvider,
+    createRpcPoolFromEnv,
+    CollectionNameResolver,
+    type RpcPool,
 } from '@superbot/analytics';
 import {
     explainMassListing,
@@ -30,6 +33,8 @@ export class MarketIndexer {
     private delistDetector = new MassDelistDetector();
     /** Same collection enrichment pattern as EventWorker sweep/cluster alerts */
     private nftMetadata = new NFTMetadataClient({ redis: redisConnection });
+    private rpcPool: RpcPool | null = null;
+    private collectionNames!: CollectionNameResolver;
     private pollIntervalMs = Number(process.env.MARKET_POLL_INTERVAL_MS) || 60_000;
     private timer: NodeJS.Timeout | null = null;
     private listingCursorByContract = new Map<string, string>();
@@ -41,6 +46,13 @@ export class MarketIndexer {
     constructor() {
         const opensea = new OpenSeaSalesClient();
         this.provider = opensea.isConfigured() ? opensea : null;
+        this.rpcPool = createRpcPoolFromEnv();
+        this.collectionNames = new CollectionNameResolver({
+            redis: redisConnection,
+            nftMetadata: this.nftMetadata,
+            rpcPool:
+                this.rpcPool && this.rpcPool.httpsUrls.length > 0 ? this.rpcPool : null,
+        });
     }
 
     public async start() {
@@ -281,6 +293,11 @@ export class MarketIndexer {
                 jobCacheKey: eventId,
             });
 
+            const { name: massListingCollectionName } = await this.collectionNames.resolve(
+                det.contract.toLowerCase(),
+                { trackedName: row.name },
+            );
+
             await discordQueue.add(
                 'discord_alert',
                 {
@@ -289,7 +306,7 @@ export class MarketIndexer {
                     alertType: 'MASS_LISTING',
                     contract: det.contract,
                     chain: det.chain,
-                    collectionName: collectionMeta?.name ?? row.name,
+                    collectionName: massListingCollectionName,
                     collectionMeta,
                     listingCount: det.count,
                     windowMs: det.windowMs,
@@ -360,6 +377,11 @@ export class MarketIndexer {
                 jobCacheKey: eventId,
             });
 
+            const { name: massDelistCollectionName } = await this.collectionNames.resolve(
+                det.contract.toLowerCase(),
+                { trackedName: row.name },
+            );
+
             await discordQueue.add(
                 'discord_alert',
                 {
@@ -368,7 +390,7 @@ export class MarketIndexer {
                     alertType: 'MASS_DELIST',
                     contract: det.contract,
                     chain: det.chain,
-                    collectionName: collectionMeta?.name ?? row.name,
+                    collectionName: massDelistCollectionName,
                     collectionMeta,
                     delistCount: det.count,
                     windowMs: det.windowMs,

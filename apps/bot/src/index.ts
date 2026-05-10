@@ -19,6 +19,7 @@ import {
     createHotMintEmbed,
 } from './embeds';
 import type { ContextualExplanation } from '@superbot/types';
+import { formatFallbackCollectionName } from '@superbot/analytics';
 import { links } from './links';
 
 dotenv.config();
@@ -279,6 +280,10 @@ export class SuperBot {
             if (alertType === 'WHALE_BUY' || alertType === 'WHALE_SALE' || alertType === 'WHALE_MINT') {
                 const embed = createWhaleBuyEmbed({
                     contract: data.contract,
+                    collectionName:
+                        typeof data.collectionName === 'string' && data.collectionName.trim()
+                            ? data.collectionName.trim()
+                            : formatFallbackCollectionName(String(data.contract || '')),
                     wallet: data.wallet,
                     tokenId: data.tokenId,
                     txHash: data.txHash,
@@ -317,6 +322,10 @@ export class SuperBot {
                     chain: data.chain,
                     velocity: data.velocity,
                     timeWindowMin: data.timeWindowMin,
+                    collectionName:
+                        typeof data.collectionName === 'string' && data.collectionName.trim()
+                            ? data.collectionName.trim()
+                            : formatFallbackCollectionName(String(data.contract || '')),
                     collectionMeta: data.collectionMeta ?? null,
                 });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -440,7 +449,10 @@ export class SuperBot {
             } else if (alertType === 'HOT_MINT') {
                 const slug = data.collectionMeta?.slug ?? null;
                 const embed = createHotMintEmbed({
-                    collectionName: data.collectionName ?? data.contract,
+                    collectionName:
+                        typeof data.collectionName === 'string' && data.collectionName.trim()
+                            ? data.collectionName.trim()
+                            : formatFallbackCollectionName(String(data.contract || '')),
                     contract: data.contract,
                     chain: data.chain || 'ethereum',
                     uniqueMinters: Number(data.uniqueMinters) || 0,
@@ -488,7 +500,10 @@ export class SuperBot {
             } else if (alertType === 'CLUSTER_BUY') {
                 const triggerTxHash = String(data.triggerTxHash || data.txHash || '');
                 const embed = createClusterBuyEmbed({
-                    collectionName: data.collectionName || data.contract,
+                    collectionName:
+                        typeof data.collectionName === 'string' && data.collectionName.trim()
+                            ? data.collectionName.trim()
+                            : formatFallbackCollectionName(String(data.contract || '')),
                     contract: data.contract,
                     chain: data.chain || 'ethereum',
                     wallets: Array.isArray(data.wallets) ? data.wallets : [],
@@ -541,6 +556,7 @@ export class SuperBot {
         eventId: string;
         channelId: string;
         contract: string;
+        collectionName?: string;
         replyToMessageId: string;
         alertType: 'MASS_LISTING' | 'MASS_DELIST';
         floorBefore: number | null;
@@ -581,6 +597,10 @@ export class SuperBot {
             const embed = createFloorImpactFollowupEmbed({
                 alertType: data.alertType,
                 contract: data.contract,
+                collectionName:
+                    typeof data.collectionName === 'string' && data.collectionName.trim()
+                        ? data.collectionName.trim()
+                        : formatFallbackCollectionName(String(data.contract || '')),
                 floorBefore: data.floorBefore,
                 floorAfter: data.floorAfter,
                 pctChange: data.pctChange,

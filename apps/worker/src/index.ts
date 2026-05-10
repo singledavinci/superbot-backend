@@ -11,6 +11,10 @@ import {
     OpenSeaSalesClient,
     createRpcPoolFromEnv,
     resolveHttpRpcUrl,
+    RpcPool,
+    CollectionNameResolver,
+    isPlaceholderCollectionName,
+    formatFallbackCollectionName,
     type NormalizedSale,
     type SweepDetection,
     type ClusterBuyDetection,
@@ -59,6 +63,8 @@ export class EventWorker {
     private walletProfiles = new WalletProfileClient({ redis: redisConnection });
     private hotMintDetector = new HotMintDetector();
     private openSeaFloor = new OpenSeaSalesClient();
+    private rpcPool: RpcPool | null = null;
+    private collectionNames!: CollectionNameResolver;
 
     /** Sliding window for correlated tracked-wallet intel (default 60 minutes). */
     private INTEL_WINDOW_MS =
@@ -69,12 +75,12 @@ export class EventWorker {
     constructor() {
         // Ethereum-only deployment. Re-add other chains here together with their
         // *_WSS_RPC_URL env vars when expanding multi-chain support.
-        const pool = createRpcPoolFromEnv();
-        if (pool && pool.httpsUrls.length > 0) {
+        this.rpcPool = createRpcPoolFromEnv();
+        if (this.rpcPool && this.rpcPool.httpsUrls.length > 0) {
             const pooled = {
-                getHttpsProvider: () => pool.getHttpsProvider(),
-                markHttpsSuccess: (p: JsonRpcProvider) => pool.markHttpsSuccess(p),
-                markHttps429: (p: JsonRpcProvider) => pool.markHttps429(p),
+                getHttpsProvider: () => this.rpcPool!.getHttpsProvider(),
+                markHttpsSuccess: (p: JsonRpcProvider) => this.rpcPool!.markHttpsSuccess(p),
+                markHttps429: (p: JsonRpcProvider) => this.rpcPool!.markHttps429(p),
             };
             this.saleDetectors.set('ethereum', new SaleDetector(pooled));
         } else {
@@ -85,6 +91,13 @@ export class EventWorker {
                 console.warn('[Worker] No Ethereum RPC URL configured; sale detection will be disabled.');
             }
         }
+
+        this.collectionNames = new CollectionNameResolver({
+            redis: redisConnection,
+            nftMetadata: this.nftMetadata,
+            rpcPool:
+                this.rpcPool && this.rpcPool.httpsUrls.length > 0 ? this.rpcPool : null,
+        });
 
         console.log('[Worker] HotMintDetector initialized (Ethereum, tracked collections).');
     }
@@ -241,6 +254,8 @@ export class EventWorker {
 
         const floorAfter = await this.readFloorNativeCachedOrOpenSea(chain, contract);
 
+        const { name: floorImpactCollectionName } = await this.collectionNames.resolve(contract, {});
+
         let pctChange: number | null = null;
         if (
             floorBefore !== null &&
@@ -271,6 +286,7 @@ export class EventWorker {
                 eventId: originalEventId,
                 channelId,
                 contract,
+                collectionName: floorImpactCollectionName,
                 replyToMessageId,
                 alertType: data.alertType,
                 floorBefore,
@@ -532,6 +548,15 @@ export class EventWorker {
             listingSurgeSuspectedFlag = false;
         }
 
+        const whaleNamesByGuild = new Map<string, string>();
+        if (combinedTracked.length > 0 && uniqueGuildIds.size > 0) {
+            for (const gid of uniqueGuildIds) {
+                const hint = trackedCollections.find(tc => tc.guildId === gid)?.name;
+                const nm = await this.collectionNames.resolve(contractLcEff, { trackedName: hint });
+                whaleNamesByGuild.set(gid, nm.name);
+            }
+        }
+
         for (const gid of uniqueGuildIds) {
             const guild = await prisma.guild.findUnique({
                 where: { id: gid },
@@ -623,6 +648,9 @@ export class EventWorker {
                                   ? 'WHALE_MINT'
                                   : 'WHALE_BUY',
                         contract,
+                        collectionName:
+                            whaleNamesByGuild.get(wallet.guildId) ??
+                            formatFallbackCollectionName(contractLcEff),
                         wallet: isSeller ? from : to,
                         label: wallet.label,
                         tokenId,
@@ -725,6 +753,11 @@ export class EventWorker {
             jobCacheKey: `cluster-${det.guildDbId}-${det.eventId}`,
         });
 
+        const { name: clusterCollectionName } = await this.collectionNames.resolve(
+            det.contract.toLowerCase(),
+            { trackedName: row?.name },
+        );
+
         await discordDeliveryQueue.add(
             'discord_alert',
             {
@@ -733,7 +766,7 @@ export class EventWorker {
                 alertType: 'CLUSTER_BUY',
                 contract: det.contract,
                 chain: det.chain,
-                collectionName: collectionMeta?.name ?? row?.name ?? det.contract,
+                collectionName: clusterCollectionName,
                 collectionMeta,
                 wallets: det.buyers,
                 windowMinutes: windowMin,
@@ -788,6 +821,12 @@ export class EventWorker {
             floorVsSnapshotPct: sweepFloorPct,
         });
 
+        const trackedHintSweep = collections.map(r => r.name).find(n => !isPlaceholderCollectionName(n));
+        const { name: sweepCollectionLabel } = await this.collectionNames.resolve(
+            sweep.contract.toLowerCase(),
+            { trackedName: trackedHintSweep },
+        );
+
         for (const row of collections) {
             const minTotal = row.sweepThresholdNative ?? envMinTotal;
             if (sweep.totalNative < minTotal) continue;
@@ -806,7 +845,7 @@ export class EventWorker {
                     alertType: 'SWEEP',
                     contract: sweep.contract,
                     chain: sweep.chain,
-                    collectionName: collectionMeta?.name ?? row.name,
+                    collectionName: sweepCollectionLabel,
                     collectionMeta,
                     buyer: sweep.buyer,
                     buyerProfile,
@@ -933,6 +972,12 @@ export class EventWorker {
             minTotalConfigured: minTotalCfg,
         });
 
+        const trackedHintHot = collections.map(c => c.name).find(n => !isPlaceholderCollectionName(n));
+        const { name: hotMintCollectionLabel } = await this.collectionNames.resolve(
+            det.contract.toLowerCase(),
+            { trackedName: trackedHintHot },
+        );
+
         for (const row of collections) {
             if (!row.hotMintEnabled) continue;
             const guild = guildById.get(row.guildId);
@@ -957,7 +1002,7 @@ export class EventWorker {
                     alertType: 'HOT_MINT',
                     contract: det.contract,
                     chain: det.chain,
-                    collectionName: collectionMeta?.name ?? row.name,
+                    collectionName: hotMintCollectionLabel,
                     collectionMeta,
                     uniqueMinters: det.uniqueMinters,
                     totalMints: det.totalMints,
@@ -1001,6 +1046,9 @@ export class EventWorker {
             // Mint radar carries no tokenId; collection metadata is the most we
             // can enrich. One fetch shared across every guild's alert.
             const collectionMeta = await this.nftMetadata.fetchCollection(contract).catch(() => null);
+            const { name: mintRadarCollectionName } = await this.collectionNames.resolve(
+                contract.toLowerCase(),
+            );
             for (const ch of mintChannels) {
                 await discordDeliveryQueue.add('discord_alert', {
                     eventId,
@@ -1010,6 +1058,7 @@ export class EventWorker {
                     chain, contract,
                     velocity: currentMints,
                     timeWindowMin: 5,
+                    collectionName: mintRadarCollectionName,
                     collectionMeta,
                 }, {
                     jobId: `mint-alert-${chain}-${contract}-${bucket}`

@@ -1,9 +1,10 @@
 import { EmbedBuilder } from 'discord.js';
 import type { IntelligenceReport, ContextualExplanation } from '@superbot/types';
-import type {
-    NFTMetadata,
-    CollectionMetadata,
-    WalletProfile,
+import {
+    formatFallbackCollectionName,
+    type NFTMetadata,
+    type CollectionMetadata,
+    type WalletProfile,
 } from '@superbot/analytics';
 import { links } from './links';
 
@@ -72,28 +73,34 @@ function normalizeImageUrl(url: string | null | undefined): string | null {
     return null;
 }
 
-/** Best display title: "<Collection> <#tokenId>" with sensible fallbacks. */
+/** Best display title: "<Collection> <#tokenId>" with sensible fallbacks — never raw `0x…` alone. */
 function nftTitle(
     nftMeta: NFTMetadata | null | undefined,
-    collectionMeta: CollectionMetadata | null | undefined,
+    collectionName: string,
     contract: string,
     tokenId: string | undefined,
 ): string {
-    const collection =
-        collectionMeta?.name ||
-        nftMeta?.collectionName ||
-        (contract ? shortAddr(contract) : 'Collection');
+    const lc =
+        collectionName?.trim()?.length > 0
+            ? collectionName.trim()
+            : formatFallbackCollectionName(contractForLookup(nftMeta, contract));
 
     if (nftMeta?.name) {
         // OpenSea names usually already include a #N suffix; trust them.
         return nftMeta.name;
     }
-    if (tokenId) return `${collection} #${tokenId}`;
-    return collection;
+    if (tokenId) return `${lc} #${tokenId}`;
+    return lc;
+}
+
+function contractForLookup(nftMeta: NFTMetadata | null | undefined, contract: string): string {
+    return (nftMeta?.contract || contract || '').trim();
 }
 
 export function createWhaleBuyEmbed(data: {
     contract: string;
+    /** Human-readable collection label built upstream (resolver); never omit. */
+    collectionName: string;
     wallet: string;
     tokenId: string;
     txHash: string;
@@ -120,10 +127,11 @@ export function createWhaleBuyEmbed(data: {
         color = '#00ffee';
     }
 
-    const subject = nftTitle(data.nftMeta, null, data.contract, data.tokenId);
+    const cn =
+        data.collectionName?.trim() ? data.collectionName.trim() : formatFallbackCollectionName(data.contract);
+    const subject = nftTitle(data.nftMeta, cn, data.contract, data.tokenId);
     const title = `${titlePrefix} — ${subject}`;
-    const collectionLabel =
-        data.nftMeta?.collectionName || shortAddr(data.contract);
+    const collectionLabel = cn;
 
     const embed = new EmbedBuilder().setColor(color).setTitle(title);
 
@@ -256,7 +264,9 @@ export function createClusterBuyEmbed(data: {
     aiNarrative?: string | null;
 }) {
     const sample = data.wallets.slice(0, 12).join(', ') + (data.wallets.length > 12 ? '…' : '');
-    const collectionLabel = data.collectionMeta?.name || data.collectionName;
+    const collectionLabel = data.collectionName?.trim()
+        ? data.collectionName.trim()
+        : formatFallbackCollectionName(data.contract);
 
     const embed = new EmbedBuilder()
         .setColor('#eab308')
@@ -322,9 +332,12 @@ export function createMintAlertEmbed(data: {
     chain: string;
     velocity: number;
     timeWindowMin: number;
+    collectionName: string;
     collectionMeta?: CollectionMetadata | null;
 }) {
-    const label = data.collectionMeta?.name || shortAddr(data.contract);
+    const label = data.collectionName?.trim()
+        ? data.collectionName.trim()
+        : formatFallbackCollectionName(data.contract);
     const embed = new EmbedBuilder()
         .setColor('#ffcc00')
         .setTitle(`🚀 High-Velocity Mint — ${label}`)
@@ -385,7 +398,9 @@ export function createSweepEmbed(data: {
     contextualExplanation?: ContextualExplanation | null;
     aiNarrative?: string | null;
 }) {
-    const collectionLabel = data.collectionMeta?.name || data.collectionName;
+    const collectionLabel = data.collectionName?.trim()
+        ? data.collectionName.trim()
+        : formatFallbackCollectionName(data.contract);
     const shortTokens =
         data.tokenIds && data.tokenIds.length > 0
             ? data.tokenIds.slice(0, 12).join(', ') + (data.tokenIds.length > 12 ? '…' : '')
@@ -484,8 +499,10 @@ export function createMassListingEmbed(data: {
 
     const embed = new EmbedBuilder()
         .setColor('#38bdf8')
-        .setTitle('📣 Listing surge')
-        .setDescription(`Many new listings appeared in a short window.`);
+        .setTitle(`📣 Listing surge — ${data.collectionName}`)
+        .setDescription(
+            `**${data.collectionName}** — Many new listings appeared in a short window.`,
+        );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
     if (thumb) embed.setThumbnail(thumb);
@@ -542,9 +559,9 @@ export function createMassDelistEmbed(data: {
 
     const embed = new EmbedBuilder()
         .setColor('#34d399')
-        .setTitle('✨ Delist surge')
+        .setTitle(`✨ Delist surge — ${data.collectionName}`)
         .setDescription(
-            `**Delist surge:** ${data.delistCount} NFTs pulled from marketplace listings in ~${mins} min — tighter supply.`,
+            `**${data.collectionName}** — **Delist surge:** ${data.delistCount} NFTs pulled from marketplace listings in ~${mins} min — tighter supply.`,
         );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
@@ -579,6 +596,7 @@ export function createMassDelistEmbed(data: {
 export function createFloorImpactFollowupEmbed(data: {
     alertType: 'MASS_LISTING' | 'MASS_DELIST';
     contract: string;
+    collectionName: string;
     floorBefore: number | null;
     floorAfter: number | null;
     pctChange: number | null;
@@ -600,10 +618,18 @@ export function createFloorImpactFollowupEmbed(data: {
             ? `${data.pctChange >= 0 ? '+' : ''}${data.pctChange.toFixed(2)}%`
             : '—';
 
+    const coll = data.collectionName?.trim()
+        ? data.collectionName.trim()
+        : formatFallbackCollectionName(data.contract);
+
     const embed = new EmbedBuilder()
         .setColor(colorHex)
         .setTitle('Floor observation (10 min later)')
-        .setDescription(data.contract ? `Contract \`${shortAddr(data.contract)}\`` : '')
+        .setDescription(
+            data.contract
+                ? `**${coll}** · Contract \`${shortAddr(data.contract)}\``
+                : `**${coll}**`,
+        )
         .addFields(
             { name: 'Floor before', value: before, inline: true },
             { name: 'Floor now', value: after, inline: true },
@@ -656,11 +682,15 @@ export function createHotMintEmbed(data: {
     const floorShow =
         typeof data.floorEth === 'number' && data.floorEth > 0 ? `${data.floorEth.toFixed(4)} ETH` : '—';
 
+    const coll = data.collectionName?.trim()
+        ? data.collectionName.trim()
+        : formatFallbackCollectionName(data.contract);
+
     const embed = new EmbedBuilder()
         .setColor('#f97316')
-        .setTitle(`🔥 Hot Mint — ${data.collectionName}`)
+        .setTitle(`🔥 Hot Mint — ${coll}`)
         .setDescription(
-            `**${data.uniqueMinters}** wallets minted **${data.totalMints}** tokens in **~${data.windowMinutes}** minutes.`,
+            `**${coll}** — **${data.uniqueMinters}** wallets minted **${data.totalMints}** tokens in **~${data.windowMinutes}** minutes.`,
         );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
@@ -710,10 +740,14 @@ export function createFloorMovementEmbed(data: {
     const title = isDrop ? '📉 Floor dropped' : '📈 Floor climbed';
     const color = isDrop ? '#ef4444' : '#22c55e';
 
+    const cn = data.collectionName?.trim()
+        ? data.collectionName.trim()
+        : formatFallbackCollectionName(data.contract);
+
     const embed = new EmbedBuilder()
         .setColor(color)
         .setTitle(title)
-        .setDescription(`**${data.collectionName}**`)
+        .setDescription(`**${cn}**`)
         .addFields(
             { name: 'Floor now', value: `${data.floorPrice} ${data.currency}`, inline: true },
             { name: 'Previous', value: `${data.prevFloor} ${data.currency}`, inline: true },
@@ -737,10 +771,13 @@ export function createFloorUpdateEmbed(data: {
     floorPrice: number;
     currency: string;
 }) {
+    const cn = data.collectionName?.trim()
+        ? data.collectionName.trim()
+        : formatFallbackCollectionName(data.contract);
     const embed = new EmbedBuilder()
         .setColor('#a855f7')
         .setTitle('📊 Floor Price Update')
-        .setDescription(`New floor detected for **${data.collectionName}**`)
+        .setDescription(`New floor detected for **${cn}**`)
         .addFields(
             { name: 'New Floor', value: `${data.floorPrice} ${data.currency}`, inline: true },
             { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: true },

@@ -11,6 +11,7 @@ export * from './MassListingDetector';
 export * from './MassDelistDetector';
 export * from './HotMintDetector';
 export * from './NFTMetadata';
+export * from './CollectionNameResolver';
 export * from './WalletProfile';
 export * from './rpcUrls';
 export * from './RpcPool';

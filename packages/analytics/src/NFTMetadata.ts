@@ -223,6 +223,29 @@ export class NFTMetadataClient {
         return result;
     }
 
+    /**
+     * OpenSea-only collection metadata (part of CollectionNameResolver fallback chain).
+     * Does not read/write the NFTMetadata `collection_meta:` cache — resolver uses separate keys.
+     */
+    public async fetchCollectionOpenSeaMeta(
+        contract: string,
+        chain: 'ethereum' = 'ethereum',
+    ): Promise<CollectionMetadata | null> {
+        if (!this.openseaKey) return null;
+        return this.fetchCollectionFromOpenSea(chain, contract);
+    }
+
+    /**
+     * Alchemy-only `getContractMetadata` path (paired with fetchCollectionOpenSeaMeta for deterministic ordering).
+     */
+    public async fetchCollectionAlchemyMeta(
+        contract: string,
+        chain: 'ethereum' = 'ethereum',
+    ): Promise<CollectionMetadata | null> {
+        if (!this.alchemyKey) return null;
+        return this.fetchCollectionFromAlchemy(chain, contract);
+    }
+
     private async fetchFromOpenSea(
         chain: string,
         contract: string,

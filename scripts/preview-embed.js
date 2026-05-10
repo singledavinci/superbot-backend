@@ -12,7 +12,11 @@
 require('dotenv').config();
 require('ts-node').register({ transpileOnly: true, compilerOptions: { module: 'CommonJS' } });
 
-const { NFTMetadataClient, WalletProfileClient } = require('../packages/analytics/src');
+const {
+    NFTMetadataClient,
+    WalletProfileClient,
+    formatFallbackCollectionName,
+} = require('../packages/analytics/src');
 const {
     createWhaleBuyEmbed,
     createMassListingEmbed,
@@ -70,14 +74,18 @@ function arg(name, fallback) {
     }
 
     const t0 = Date.now();
-    const [nftMeta, walletProfile] = await Promise.all([
+    const [nftMeta, walletProfile, whaleColMeta] = await Promise.all([
         nfts.fetchNFT('ethereum', contract, tokenId),
         wallets.fetchProfile(wallet),
+        nfts.fetchCollection(contract).catch(() => null),
     ]);
     const totalMs = Date.now() - t0;
 
     const embed = createWhaleBuyEmbed({
         contract,
+        collectionName:
+            (whaleColMeta && whaleColMeta.name && String(whaleColMeta.name).trim()) ||
+            formatFallbackCollectionName(contract),
         wallet,
         tokenId,
         txHash: '0x' + 'a'.repeat(64),
@@ -163,6 +171,7 @@ function arg(name, fallback) {
         createFloorImpactFollowupEmbed({
             alertType: 'MASS_DELIST',
             contract,
+            collectionName: colMetaMass?.name ?? formatFallbackCollectionName(contract),
             floorBefore: 1.254,
             floorAfter: 1.31,
             pctChange: ((1.31 - 1.254) / 1.254) * 100,

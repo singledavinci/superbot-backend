@@ -1,7 +1,13 @@
 import { prisma } from '@superbot/database';
 import { discordQueue as discordDeliveryQueue } from '@superbot/queue';
 import { redisConnection } from '@superbot/queue';
-import { FloorProvider } from '@superbot/analytics';
+import {
+    FloorProvider,
+    NFTMetadataClient,
+    createRpcPoolFromEnv,
+    CollectionNameResolver,
+    type RpcPool,
+} from '@superbot/analytics';
 import { explainFloorMovement, summarizeFactsWithOptionalAi } from '@superbot/intelligence';
 import * as dotenv from 'dotenv';
 
@@ -21,8 +27,21 @@ interface SnapshotPayload {
 
 export class FloorWorker {
     private floorProvider = new FloorProvider();
+    private nftMetadata = new NFTMetadataClient({ redis: redisConnection });
+    private rpcPool: RpcPool | null = null;
+    private collectionNames!: CollectionNameResolver;
     private interval: NodeJS.Timeout | null = null;
     private POLL_INTERVAL = (Number(process.env.FLOOR_POLL_INTERVAL_SECONDS) || 3600) * 1000;
+
+    constructor() {
+        this.rpcPool = createRpcPoolFromEnv();
+        this.collectionNames = new CollectionNameResolver({
+            redis: redisConnection,
+            nftMetadata: this.nftMetadata,
+            rpcPool:
+                this.rpcPool && this.rpcPool.httpsUrls.length > 0 ? this.rpcPool : null,
+        });
+    }
 
     public async start() {
         console.log(`🕒 Floor Checker started. Polling every ${this.POLL_INTERVAL / 1000}s...`);
@@ -106,6 +125,9 @@ export class FloorWorker {
                             explanation: cxDrop,
                             jobCacheKey: `floor-drop-${item.id}-${hourBucket}`,
                         });
+                        const { name: floorDropCollName } = await this.collectionNames.resolve(contract, {
+                            trackedName: item.name,
+                        });
                         await discordDeliveryQueue.add(
                             'discord_alert',
                             {
@@ -113,7 +135,7 @@ export class FloorWorker {
                                 channelId: item.alertChannelId,
                                 alertType: 'FLOOR_DROP',
                                 contract,
-                                collectionName: item.name,
+                                collectionName: floorDropCollName,
                                 floorPrice: current.priceNative,
                                 prevFloor: prev.priceNative,
                                 pctChange: dropPct,
@@ -148,6 +170,9 @@ export class FloorWorker {
                             explanation: cxRise,
                             jobCacheKey: `floor-rise-${item.id}-${hourBucket}`,
                         });
+                        const { name: floorRiseCollName } = await this.collectionNames.resolve(contract, {
+                            trackedName: item.name,
+                        });
                         await discordDeliveryQueue.add(
                             'discord_alert',
                             {
@@ -155,7 +180,7 @@ export class FloorWorker {
                                 channelId: item.alertChannelId,
                                 alertType: 'FLOOR_RISE',
                                 contract,
-                                collectionName: item.name,
+                                collectionName: floorRiseCollName,
                                 floorPrice: current.priceNative,
                                 prevFloor: prev.priceNative,
                                 pctChange: risePct,
