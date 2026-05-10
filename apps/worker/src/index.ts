@@ -112,7 +112,7 @@ export class EventWorker {
      */
     private nftMetadata = new NFTMetadataClient({ redis: redisConnection });
     private walletProfiles = new WalletProfileClient({ redis: redisConnection });
-    private hotMintDetector = new HotMintDetector();
+    private hotMintDetector = new HotMintDetector(redisConnection);
     private openSeaFloor = new OpenSeaSalesClient();
     private rpcPool: RpcPool | null = null;
     private collectionNames!: CollectionNameResolver;
@@ -169,7 +169,7 @@ export class EventWorker {
             },
         );
 
-        console.log('[Worker] HotMintDetector initialized (Ethereum, tracked collections).');
+        console.log('[Worker] HotMintDetector initialized (Ethereum, Redis-backed window for multi-replica).');
     }
 
     public async start() {
@@ -631,12 +631,13 @@ export class EventWorker {
                       ? jobTs
                       : jobTs * 1000
                     : Date.now();
-            const hotDet = this.hotMintDetector.ingest({
+            const hotDet = await this.hotMintDetector.ingestAsync({
                 chain: chainLc,
                 contract: contract.toLowerCase(),
                 minter: to.toLowerCase(),
                 blockNumber: jobBlock !== undefined && jobBlock > 0 ? jobBlock : undefined,
                 tsMs,
+                eventId: typeof eventId === 'string' && eventId ? eventId : `${txHash}:${tokenId}`,
             });
             if (hotDet) {
                 await this.dispatchHotMint(hotDet, trackedCollections);
@@ -1276,11 +1277,11 @@ export class EventWorker {
         const minUniqueCfg =
             Number(process.env.HOT_MINT_MIN_UNIQUE_MINTERS) > 0
                 ? Number(process.env.HOT_MINT_MIN_UNIQUE_MINTERS)
-                : 15;
+                : 5;
         const minTotalCfg =
             Number(process.env.HOT_MINT_MIN_TOTAL_MINTS) > 0
                 ? Number(process.env.HOT_MINT_MIN_TOTAL_MINTS)
-                : 25;
+                : 10;
         const cxHot = explainHotMint({
             uniqueMinters: det.uniqueMinters,
             totalMints: det.totalMints,
@@ -1315,6 +1316,10 @@ export class EventWorker {
                 explanation: cxHot,
                 jobCacheKey: `hot-mint-${row.id}-${det.eventId}`,
             });
+
+            console.log(
+                `[HotMint] enqueue discord_alert type=HOT_MINT eventId=${det.eventId} minters=${det.uniqueMinters} totalMints=${det.totalMints} windowMin=${windowMin}`,
+            );
 
             await discordDeliveryQueue.add(
                 'discord_alert',
