@@ -8,3 +8,5 @@ export * from './OpenSeaSales';
 export * from './SweepDetector';
 export * from './SmartMoneyClusterDetector';
 export * from './MassListingDetector';
+export * from './NFTMetadata';
+export * from './WalletProfile';

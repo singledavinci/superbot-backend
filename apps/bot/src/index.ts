@@ -220,6 +220,9 @@ export class SuperBot {
                     label: data.label,
                     intelligence: data.intelligence,
                     possibleWashTrading: Boolean(data.possibleWashTrading),
+                    nftMeta: data.nftMeta ?? null,
+                    walletProfile: data.walletProfile ?? null,
+                    counterpartyProfile: data.counterpartyProfile ?? null,
                 });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     new ButtonBuilder()
@@ -243,7 +246,13 @@ export class SuperBot {
                     allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] }
                 });
             } else if (alertType === 'MINT_RADAR') {
-                const embed = createMintAlertEmbed(data);
+                const embed = createMintAlertEmbed({
+                    contract: data.contract,
+                    chain: data.chain,
+                    velocity: data.velocity,
+                    timeWindowMin: data.timeWindowMin,
+                    collectionMeta: data.collectionMeta ?? null,
+                });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     new ButtonBuilder()
                         .setLabel('View Contract')
@@ -265,7 +274,20 @@ export class SuperBot {
                     allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] }
                 });
             } else if (alertType === 'SWEEP') {
-                const embed = createSweepEmbed(data);
+                const embed = createSweepEmbed({
+                    collectionName: data.collectionName,
+                    contract: data.contract,
+                    chain: data.chain,
+                    buyer: data.buyer,
+                    txHash: data.txHash,
+                    itemCount: data.itemCount,
+                    totalNative: data.totalNative,
+                    currency: data.currency,
+                    tokenIds: data.tokenIds,
+                    collectionMeta: data.collectionMeta ?? null,
+                    buyerProfile: data.buyerProfile ?? null,
+                    sampleNftMetas: Array.isArray(data.sampleNftMetas) ? data.sampleNftMetas : [],
+                });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     new ButtonBuilder()
                         .setLabel('Transaction')
@@ -321,6 +343,8 @@ export class SuperBot {
                     windowMinutes: Number(data.windowMinutes) || 30,
                     triggerTxHash,
                     triggerBuyer: data.triggerBuyer || '',
+                    collectionMeta: data.collectionMeta ?? null,
+                    triggerProfile: data.triggerProfile ?? null,
                 });
                 const components =
                     /^0x[a-fA-F0-9]{64}$/.test(triggerTxHash)

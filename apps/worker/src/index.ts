@@ -6,9 +6,13 @@ import {
     SmartMoneyProfiler,
     SweepDetector,
     SmartMoneyClusterDetector,
+    NFTMetadataClient,
+    WalletProfileClient,
     type NormalizedSale,
     type SweepDetection,
     type ClusterBuyDetection,
+    type NFTMetadata,
+    type WalletProfile,
 } from '@superbot/analytics';
 import { SniperEngine } from '@superbot/utils';
 import { ContextEngine, SaleDetector } from '@superbot/intelligence';
@@ -46,6 +50,14 @@ export class EventWorker {
     private profileCache = new Map<string, { profile: any, timestamp: number }>();
     private CACHE_TTL = 10 * 60 * 1000; // 10 minutes
     private SNIPING_ENABLED = false; // Hard-disabled for security per audit
+
+    /**
+     * Per-NFT and per-wallet enrichment used to decorate Discord alert embeds.
+     * Both clients are best-effort and never throw — failed lookups degrade the
+     * embed instead of blocking the alert.
+     */
+    private nftMetadata = new NFTMetadataClient({ redis: redisConnection });
+    private walletProfiles = new WalletProfileClient({ redis: redisConnection });
 
     constructor() {
         // Ethereum-only deployment. Re-add other chains here together with their
@@ -269,6 +281,22 @@ export class EventWorker {
             possibleWashTrading = await this.recentWashPair(to, from);
         }
 
+        // Enrich the NFT once per (contract, tokenId) and the buyer/seller
+        // wallets once each — Promise.all keeps total enrichment latency at the
+        // slowest single call (~2s typical, 4s timeout).
+        const enrichmentStart = Date.now();
+        const [nftMeta, buyerProfile, sellerProfile] = await Promise.all([
+            this.safeFetchNFT(chain, contract, tokenId),
+            this.safeFetchWallet(to),
+            from && from !== ZERO_ADDR ? this.safeFetchWallet(from) : Promise.resolve(null),
+        ]);
+        const enrichmentMs = Date.now() - enrichmentStart;
+        if (enrichmentMs > 1500) {
+            console.log(
+                `[Worker] Enrichment took ${enrichmentMs}ms for ${contract}:${tokenId} (buyer=${to})`,
+            );
+        }
+
         for (const gid of uniqueGuildIds) {
             const guild = await prisma.guild.findUnique({
                 where: { id: gid },
@@ -294,6 +322,11 @@ export class EventWorker {
                 const profile = await this.profiler.getWalletProfile(to);
                 const intelligence = this.contextEngine.analyzeWhaleBuy(profile, true, null, null, null);
 
+                const isSeller =
+                    wallet.address.toLowerCase() === from.toLowerCase();
+                const focusProfile = isSeller ? sellerProfile : buyerProfile;
+                const counterpartyProfile = isSeller ? buyerProfile : sellerProfile;
+
                 await discordDeliveryQueue.add(
                     'discord_alert',
                     {
@@ -306,7 +339,7 @@ export class EventWorker {
                                   ? 'WHALE_MINT'
                                   : 'WHALE_BUY',
                         contract,
-                        wallet: to,
+                        wallet: isSeller ? from : to,
                         label: wallet.label,
                         tokenId,
                         txHash,
@@ -316,12 +349,50 @@ export class EventWorker {
                         intelligence,
                         mentionRoleId: wallet.mentionRoleId,
                         possibleWashTrading: possibleWashTrading || undefined,
+                        nftMeta,
+                        walletProfile: focusProfile,
+                        counterpartyProfile,
                     },
                     {
                         jobId: `alert-${wallet.id}-${eventId}-${channelId}`,
                     },
                 );
             }
+        }
+    }
+
+    /**
+     * Wrap NFT enrichment so a hung external call cannot block the worker
+     * pipeline. The client already times out at ~4s; this is a belt-and-braces
+     * 6s ceiling that converts any unexpected throw into a null result.
+     */
+    private async safeFetchNFT(
+        chain: string,
+        contract: string,
+        tokenId: string,
+    ): Promise<NFTMetadata | null> {
+        if (chain !== 'ethereum' || !contract || !tokenId) return null;
+        try {
+            return await Promise.race<NFTMetadata | null>([
+                this.nftMetadata.fetchNFT('ethereum', contract, tokenId),
+                new Promise<null>(resolve => setTimeout(() => resolve(null), 6_000)),
+            ]);
+        } catch (err) {
+            console.warn(`[Worker] safeFetchNFT failed for ${contract}:${tokenId}:`, err);
+            return null;
+        }
+    }
+
+    private async safeFetchWallet(address: string): Promise<WalletProfile | null> {
+        if (!address) return null;
+        try {
+            return await Promise.race<WalletProfile | null>([
+                this.walletProfiles.fetchProfile(address),
+                new Promise<null>(resolve => setTimeout(() => resolve(null), 6_000)),
+            ]);
+        } catch (err) {
+            console.warn(`[Worker] safeFetchWallet failed for ${address}:`, err);
+            return null;
         }
     }
 
@@ -353,6 +424,13 @@ export class EventWorker {
 
         const windowMin = Math.max(1, Math.round(det.windowMs / 60000));
 
+        // Enrich the trigger buyer + collection only — cluster alerts have no
+        // single tokenId, so we deliberately skip per-NFT lookups here.
+        const [collectionMeta, triggerProfile] = await Promise.all([
+            this.nftMetadata.fetchCollection(det.contract).catch(() => null),
+            this.safeFetchWallet(det.triggerBuyer),
+        ]);
+
         await discordDeliveryQueue.add(
             'discord_alert',
             {
@@ -361,11 +439,13 @@ export class EventWorker {
                 alertType: 'CLUSTER_BUY',
                 contract: det.contract,
                 chain: det.chain,
-                collectionName: row?.name ?? det.contract,
+                collectionName: collectionMeta?.name ?? row?.name ?? det.contract,
+                collectionMeta,
                 wallets: det.buyers,
                 windowMinutes: windowMin,
                 triggerTxHash: det.triggerTxHash,
                 triggerBuyer: det.triggerBuyer,
+                triggerProfile,
                 mentionRoleId: row?.mentionRoleId ?? null,
             },
             {
@@ -388,6 +468,18 @@ export class EventWorker {
     ) {
         const envMinTotal = Number(process.env.SWEEP_MIN_TOTAL_NATIVE) || 0.5;
 
+        // Enrich at most the first three swept tokens (most informative for the
+        // embed thumbnail strip without ballooning external request volume) and
+        // the buyer profile. Run all lookups in parallel.
+        const sampleTokens = sweep.tokenIds.slice(0, 3);
+        const [collectionMeta, buyerProfile, ...sampleMetas] = await Promise.all([
+            this.nftMetadata.fetchCollection(sweep.contract).catch(() => null),
+            this.safeFetchWallet(sweep.buyer),
+            ...sampleTokens.map(tid =>
+                this.safeFetchNFT(sweep.chain, sweep.contract, tid),
+            ),
+        ]);
+
         for (const row of collections) {
             const minTotal = row.sweepThresholdNative ?? envMinTotal;
             if (sweep.totalNative < minTotal) continue;
@@ -401,13 +493,16 @@ export class EventWorker {
                     alertType: 'SWEEP',
                     contract: sweep.contract,
                     chain: sweep.chain,
-                    collectionName: row.name,
+                    collectionName: collectionMeta?.name ?? row.name,
+                    collectionMeta,
                     buyer: sweep.buyer,
+                    buyerProfile,
                     txHash: sweep.txHash,
                     itemCount: sweep.itemCount,
                     totalNative: sweep.totalNative,
                     currency: sweep.currency,
                     tokenIds: sweep.tokenIds,
+                    sampleNftMetas: sampleMetas.filter((m): m is NFTMetadata => m !== null),
                     mentionRoleId: row.mentionRoleId,
                 },
                 {
@@ -437,6 +532,9 @@ export class EventWorker {
             // Use a deterministic time-bucketed eventId so dedupe works across worker replicas
             const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
             const eventId = `mint-radar-${chain}-${contract}-${bucket}`;
+            // Mint radar carries no tokenId; collection metadata is the most we
+            // can enrich. One fetch shared across every guild's alert.
+            const collectionMeta = await this.nftMetadata.fetchCollection(contract).catch(() => null);
             for (const ch of mintChannels) {
                 await discordDeliveryQueue.add('discord_alert', {
                     eventId,
@@ -445,7 +543,8 @@ export class EventWorker {
                     alertType: 'MINT_RADAR',
                     chain, contract,
                     velocity: currentMints,
-                    timeWindowMin: 5
+                    timeWindowMin: 5,
+                    collectionMeta,
                 }, {
                     jobId: `mint-alert-${chain}-${contract}-${bucket}`
                 });
