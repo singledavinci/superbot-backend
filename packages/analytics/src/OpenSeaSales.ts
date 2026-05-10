@@ -66,19 +66,20 @@ const OPENSEA_CHAIN_NAMES: Record<string, string> = {
 };
 
 /**
- * OpenSea API v2 sales source.
+ * OpenSea API v2 sales / listings source.
  *
- * Endpoint: GET /api/v2/events/chain/{chain}/contract/{contract}?event_type=sale
- * Docs:    https://docs.opensea.io/reference/list_events_by_nft_contract
+ * For contract-wide events OpenSea v2 only exposes the *collection-slug*
+ * endpoint: GET /api/v2/events/collection/{slug}?event_type=sale|listing
+ * (a hypothetical /events/chain/{chain}/contract/{addr} returns 404).
  *
- * Cursor format: unix-seconds string (last `event_timestamp` we ingested).
- * On the next poll we set `after = cursor` so OpenSea only returns events
- * strictly newer than what we already saw.
+ * We resolve `contract -> slug` via /api/v2/chain/{chain}/contract/{addr}
+ * and cache the result for the lifetime of the process. Cursors are
+ * unix-seconds (last `event_timestamp` we ingested); the next poll sets
+ * `after = cursor` so OpenSea only returns strictly newer events.
  *
- * Free tier: requires an `X-API-KEY` header (request one at
- * https://docs.opensea.io/reference/api-keys). The provider reports
- * `isConfigured=false` until the key is set, so the SalesIndexer falls
- * through to the next provider.
+ * Requires an `X-API-KEY` header. When unset the provider reports
+ * `isConfigured=false` and the SalesIndexer falls through to the next
+ * provider in priority order.
  */
 export class OpenSeaSalesClient implements SalesProvider {
     public readonly name = 'opensea';
@@ -102,22 +103,25 @@ export class OpenSeaSalesClient implements SalesProvider {
     public async fetchSales(args: FetchSalesArgs): Promise<FetchSalesResult> {
         if (!this.isConfigured()) return { sales: [] };
 
-        const requestedChain = (args.chain || 'ethereum').toLowerCase();
-        const chain = OPENSEA_CHAIN_NAMES[requestedChain];
+        const chain = this.resolveChain(args.chain);
         if (!chain) return { sales: [] };
+
+        const slug = await this.getSlug(chain, args.contract.toLowerCase());
+        if (!slug) {
+            console.warn(
+                `[OpenSeaSalesClient] could not resolve slug for ${args.contract} on ${chain}; skipping sales fetch.`,
+            );
+            return { sales: [], nextCursor: args.cursor };
+        }
 
         const limit = Math.min(args.limit ?? 50, 50); // OpenSea v2 caps at 50
         const after = args.cursor ? Number(args.cursor) : undefined;
 
         try {
             const response = await axios.get<OpenSeaEventsResponse>(
-                `https://api.opensea.io/api/v2/events/chain/${chain}/contract/${args.contract}`,
+                `https://api.opensea.io/api/v2/events/collection/${slug}`,
                 {
-                    params: {
-                        event_type: 'sale',
-                        after,
-                        limit,
-                    },
+                    params: { event_type: 'sale', after, limit },
                     headers: { 'X-API-KEY': this.apiKey, accept: 'application/json' },
                     timeout: 15_000,
                 },
@@ -141,7 +145,7 @@ export class OpenSeaSalesClient implements SalesProvider {
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             console.error(
-                `[OpenSeaSalesClient] /events/chain/${chain}/contract/${args.contract} failed: ${message}`,
+                `[OpenSeaSalesClient] /events/collection/${slug}?event_type=sale failed: ${message}`,
             );
             return { sales: [], nextCursor: args.cursor };
         }
@@ -150,22 +154,25 @@ export class OpenSeaSalesClient implements SalesProvider {
     public async fetchListings(args: FetchListingsArgs): Promise<FetchListingsResult> {
         if (!this.isConfigured()) return { listings: [] };
 
-        const requestedChain = (args.chain || 'ethereum').toLowerCase();
-        const chain = OPENSEA_CHAIN_NAMES[requestedChain];
+        const chain = this.resolveChain(args.chain);
         if (!chain) return { listings: [] };
+
+        const slug = await this.getSlug(chain, args.contract.toLowerCase());
+        if (!slug) {
+            console.warn(
+                `[OpenSeaSalesClient] could not resolve slug for ${args.contract} on ${chain}; skipping listings fetch.`,
+            );
+            return { listings: [], nextCursor: args.cursor };
+        }
 
         const limit = Math.min(args.limit ?? 50, 50);
         const after = args.cursor ? Number(args.cursor) : undefined;
 
         try {
             const response = await axios.get<OpenSeaEventsResponse>(
-                `https://api.opensea.io/api/v2/events/chain/${chain}/contract/${args.contract}`,
+                `https://api.opensea.io/api/v2/events/collection/${slug}`,
                 {
-                    params: {
-                        event_type: 'listing',
-                        after,
-                        limit,
-                    },
+                    params: { event_type: 'listing', after, limit },
                     headers: { 'X-API-KEY': this.apiKey, accept: 'application/json' },
                     timeout: 15_000,
                 },
@@ -192,26 +199,34 @@ export class OpenSeaSalesClient implements SalesProvider {
         } catch (error) {
             const message = error instanceof Error ? error.message : String(error);
             console.error(
-                `[OpenSeaSalesClient] listings events chain/${chain}/contract/${args.contract} failed: ${message}`,
+                `[OpenSeaSalesClient] /events/collection/${slug}?event_type=listing failed: ${message}`,
             );
             return { listings: [], nextCursor: args.cursor };
         }
     }
 
+    private resolveChain(chain?: string): string | null {
+        const requested = (chain || 'ethereum').toLowerCase();
+        return OPENSEA_CHAIN_NAMES[requested] ?? null;
+    }
+
+    /** Resolve and cache contract -> OpenSea collection slug. */
+    private async getSlug(chain: string, contractLower: string): Promise<string | null> {
+        const cached = this.slugByContract.get(`${chain}:${contractLower}`);
+        if (cached) return cached;
+        return this.resolveCollectionSlug(chain, contractLower);
+    }
+
     public async fetchFloor(args: FetchFloorArgs): Promise<FetchFloorResult | null> {
         if (!this.isConfigured()) return null;
 
-        const requestedChain = (args.chain || 'ethereum').toLowerCase();
-        const chain = OPENSEA_CHAIN_NAMES[requestedChain];
+        const chain = this.resolveChain(args.chain);
         if (!chain) return null;
 
         const contract = args.contract.toLowerCase();
 
         try {
-            const slug =
-                this.slugByContract.get(`${chain}:${contract}`) ??
-                (await this.resolveCollectionSlug(chain, contract));
-
+            const slug = await this.getSlug(chain, contract);
             if (!slug) return null;
 
             const stats = await axios.get<OpenSeaCollectionStatsResponse>(
