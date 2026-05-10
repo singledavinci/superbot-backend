@@ -284,6 +284,7 @@ export class SuperBot {
                         typeof data.collectionName === 'string' && data.collectionName.trim()
                             ? data.collectionName.trim()
                             : formatFallbackCollectionName(String(data.contract || '')),
+                    nftName: typeof data.nftName === 'string' && data.nftName.trim() ? data.nftName.trim() : undefined,
                     wallet: data.wallet,
                     tokenId: data.tokenId,
                     txHash: data.txHash,
@@ -359,6 +360,7 @@ export class SuperBot {
                     collectionMeta: data.collectionMeta ?? null,
                     buyerProfile: data.buyerProfile ?? null,
                     sampleNftMetas: Array.isArray(data.sampleNftMetas) ? data.sampleNftMetas : [],
+                    sampleNftNames: Array.isArray(data.sampleNftNames) ? data.sampleNftNames : undefined,
                     contextualExplanation: data.contextualExplanation ?? null,
                     aiNarrative: data.aiNarrative ?? undefined,
                 });
@@ -512,6 +514,11 @@ export class SuperBot {
                     triggerBuyer: data.triggerBuyer || '',
                     collectionMeta: data.collectionMeta ?? null,
                     triggerProfile: data.triggerProfile ?? null,
+                    nftName: typeof data.nftName === 'string' && data.nftName.trim() ? data.nftName.trim() : undefined,
+                    triggerTokenId:
+                        typeof data.triggerTokenId === 'string' && data.triggerTokenId.trim()
+                            ? data.triggerTokenId.trim()
+                            : undefined,
                     contextualExplanation: data.contextualExplanation ?? null,
                     aiNarrative: data.aiNarrative ?? undefined,
                 });

@@ -194,6 +194,33 @@ export class NFTMetadataClient {
     }
 
     /**
+     * OpenSea v2 NFT path only (for deterministic resolver ordering). Bypasses Redis 
+ft: cache
+     * and skips Alchemy.
+     */
+    public async fetchNFTOpenSeaOnly(
+        chain: 'ethereum',
+        contract: string,
+        tokenId: string,
+    ): Promise<NFTMetadata | null> {
+        if (!this.openseaKey) return null;
+        const os = await this.fetchFromOpenSea(chain, contract, tokenId);
+        return os.kind === 'ok' ? os.value : null;
+    }
+
+    /** Alchemy getNFTMetadata path only — bypasses Redis 
+ft: cache. */
+    public async fetchNFTAlchemyOnly(
+        chain: 'ethereum',
+        contract: string,
+        tokenId: string,
+    ): Promise<NFTMetadata | null> {
+        if (!this.alchemyKey) return null;
+        if (chain !== 'ethereum') return null;
+        return this.fetchFromAlchemy(chain, contract, tokenId);
+    }
+
+    /**
      * Fetch collection-level metadata (name, image, verification status). Cached separately from
      * per-NFT entries because it changes orders of magnitude less often.
      */

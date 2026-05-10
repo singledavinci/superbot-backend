@@ -81,11 +81,13 @@ function arg(name, fallback) {
     ]);
     const totalMs = Date.now() - t0;
 
+    const previewCol =
+        (whaleColMeta && whaleColMeta.name && String(whaleColMeta.name).trim()) ||
+        formatFallbackCollectionName(contract);
     const embed = createWhaleBuyEmbed({
         contract,
-        collectionName:
-            (whaleColMeta && whaleColMeta.name && String(whaleColMeta.name).trim()) ||
-            formatFallbackCollectionName(contract),
+        collectionName: previewCol,
+        nftName: (nftMeta && nftMeta.name && String(nftMeta.name).trim()) || `${previewCol} #${tokenId}`,
         wallet,
         tokenId,
         txHash: '0x' + 'a'.repeat(64),

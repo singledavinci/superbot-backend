@@ -12,6 +12,7 @@ export * from './MassDelistDetector';
 export * from './HotMintDetector';
 export * from './NFTMetadata';
 export * from './CollectionNameResolver';
+export * from './NftNameResolver';
 export * from './WalletProfile';
 export * from './rpcUrls';
 export * from './RpcPool';

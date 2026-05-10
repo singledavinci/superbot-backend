@@ -11,6 +11,8 @@ export interface ClusterBuyDetection {
     buyers: string[];
     triggerTxHash: string;
     triggerBuyer: string;
+    /** NFT that triggered cluster detection when the sale payload includes tokenId */
+    triggerTokenId?: string;
     windowMs: number;
 }
 
@@ -67,6 +69,12 @@ export class SmartMoneyClusterDetector {
             buyers: distinct.sort(),
             triggerTxHash: sale.txHash,
             triggerBuyer: buyer,
+            triggerTokenId:
+                sale.tokenId !== undefined &&
+                sale.tokenId !== null &&
+                String(sale.tokenId).trim().length > 0
+                    ? String(sale.tokenId).trim()
+                    : undefined,
             windowMs,
         };
     }

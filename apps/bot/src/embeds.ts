@@ -101,6 +101,8 @@ export function createWhaleBuyEmbed(data: {
     contract: string;
     /** Human-readable collection label built upstream (resolver); never omit. */
     collectionName: string;
+    /** Resolver NFT display title (optional for legacy queue payloads). */
+    nftName?: string;
     wallet: string;
     tokenId: string;
     txHash: string;
@@ -129,8 +131,10 @@ export function createWhaleBuyEmbed(data: {
 
     const cn =
         data.collectionName?.trim() ? data.collectionName.trim() : formatFallbackCollectionName(data.contract);
-    const subject = nftTitle(data.nftMeta, cn, data.contract, data.tokenId);
-    const title = `${titlePrefix} — ${subject}`;
+    const nftLabel = data.nftName?.trim()
+        ? data.nftName.trim()
+        : nftTitle(data.nftMeta, cn, data.contract, data.tokenId);
+    const title = `${titlePrefix} — ${nftLabel}`;
     const collectionLabel = cn;
 
     const embed = new EmbedBuilder().setColor(color).setTitle(title);
@@ -152,7 +156,7 @@ export function createWhaleBuyEmbed(data: {
     );
 
     embed.addFields(
-        { name: 'Token', value: data.tokenId ? `#${data.tokenId}` : '—', inline: true },
+        { name: 'Token', value: nftLabel.length > 220 ? `${nftLabel.slice(0, 217)}…` : nftLabel, inline: true },
         {
             name: 'Wallet',
             value: data.walletProfile?.openseaUrl
@@ -258,6 +262,8 @@ export function createClusterBuyEmbed(data: {
     windowMinutes: number;
     triggerTxHash: string;
     triggerBuyer: string;
+    nftName?: string;
+    triggerTokenId?: string;
     collectionMeta?: CollectionMetadata | null;
     triggerProfile?: WalletProfile | null;
     contextualExplanation?: ContextualExplanation | null;
@@ -268,9 +274,10 @@ export function createClusterBuyEmbed(data: {
         ? data.collectionName.trim()
         : formatFallbackCollectionName(data.contract);
 
+    const headline = data.nftName?.trim() ? data.nftName.trim() : collectionLabel;
     const embed = new EmbedBuilder()
         .setColor('#eab308')
-        .setTitle(`🧲 Smart-money cluster — ${collectionLabel}`)
+        .setTitle(`🧲 Smart-money cluster — ${headline}`)
         .setDescription(
             `**${data.wallets.length}** distinct watched wallets bought this collection within **~${data.windowMinutes} min**.`,
         );
@@ -305,6 +312,16 @@ export function createClusterBuyEmbed(data: {
             inline: true,
         },
     );
+
+    if (data.nftName?.trim() && data.triggerTokenId?.trim()) {
+        const tid = data.triggerTokenId.trim();
+        const itemUrl = `https://opensea.io/assets/ethereum/${data.contract.toLowerCase()}/${tid}`;
+        embed.addFields({
+            name: 'Trigger NFT',
+            value: `[${data.nftName.trim()}](${itemUrl})`,
+            inline: false,
+        });
+    }
 
     if (data.triggerProfile?.holdingsCount !== null && data.triggerProfile?.holdingsCount !== undefined) {
         embed.addFields({
@@ -395,6 +412,7 @@ export function createSweepEmbed(data: {
     collectionMeta?: CollectionMetadata | null;
     buyerProfile?: WalletProfile | null;
     sampleNftMetas?: NFTMetadata[];
+    sampleNftNames?: string[];
     contextualExplanation?: ContextualExplanation | null;
     aiNarrative?: string | null;
 }) {
@@ -448,8 +466,9 @@ export function createSweepEmbed(data: {
     if (data.sampleNftMetas && data.sampleNftMetas.length > 0) {
         const lines = data.sampleNftMetas
             .slice(0, 3)
-            .map(m => {
-                const name = m.name || `#${m.tokenId}`;
+            .map((m, i) => {
+                const resolved = data.sampleNftNames?.[i]?.trim();
+                const name = resolved || m.name || `#${m.tokenId}`;
                 if (m.openseaUrl) return `• [${name}](${m.openseaUrl})`;
                 return `• ${name}`;
             })

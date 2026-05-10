@@ -13,6 +13,7 @@ import {
     resolveHttpRpcUrl,
     RpcPool,
     CollectionNameResolver,
+    NftNameResolver,
     isPlaceholderCollectionName,
     formatFallbackCollectionName,
     type NormalizedSale,
@@ -65,6 +66,7 @@ export class EventWorker {
     private openSeaFloor = new OpenSeaSalesClient();
     private rpcPool: RpcPool | null = null;
     private collectionNames!: CollectionNameResolver;
+    private nftNames!: NftNameResolver;
 
     /** Sliding window for correlated tracked-wallet intel (default 60 minutes). */
     private INTEL_WINDOW_MS =
@@ -93,6 +95,12 @@ export class EventWorker {
         }
 
         this.collectionNames = new CollectionNameResolver({
+            redis: redisConnection,
+            nftMetadata: this.nftMetadata,
+            rpcPool:
+                this.rpcPool && this.rpcPool.httpsUrls.length > 0 ? this.rpcPool : null,
+        });
+        this.nftNames = new NftNameResolver({
             redis: redisConnection,
             nftMetadata: this.nftMetadata,
             rpcPool:
@@ -636,6 +644,15 @@ export class EventWorker {
                 const focusProfile = isSeller ? sellerProfile : buyerProfile;
                 const counterpartyProfile = isSeller ? buyerProfile : sellerProfile;
 
+                const whaleCollectionLabel =
+                    whaleNamesByGuild.get(wallet.guildId) ??
+                    formatFallbackCollectionName(contractLcEff);
+                const { name: whaleNftLabel } = await this.nftNames.resolveNftName(
+                    contractLcEff,
+                    String(tokenId),
+                    { collectionName: whaleCollectionLabel },
+                );
+
                 await discordDeliveryQueue.add(
                     'discord_alert',
                     {
@@ -648,9 +665,8 @@ export class EventWorker {
                                   ? 'WHALE_MINT'
                                   : 'WHALE_BUY',
                         contract,
-                        collectionName:
-                            whaleNamesByGuild.get(wallet.guildId) ??
-                            formatFallbackCollectionName(contractLcEff),
+                        collectionName: whaleCollectionLabel,
+                        nftName: whaleNftLabel,
                         wallet: isSeller ? from : to,
                         label: wallet.label,
                         tokenId,
@@ -758,6 +774,15 @@ export class EventWorker {
             { trackedName: row?.name },
         );
 
+        let clusterTriggerNftName: string | undefined;
+        if (det.triggerTokenId) {
+            clusterTriggerNftName = (
+                await this.nftNames.resolveNftName(det.contract.toLowerCase(), det.triggerTokenId, {
+                    collectionName: clusterCollectionName,
+                })
+            ).name;
+        }
+
         await discordDeliveryQueue.add(
             'discord_alert',
             {
@@ -767,6 +792,8 @@ export class EventWorker {
                 contract: det.contract,
                 chain: det.chain,
                 collectionName: clusterCollectionName,
+                nftName: clusterTriggerNftName,
+                triggerTokenId: det.triggerTokenId,
                 collectionMeta,
                 wallets: det.buyers,
                 windowMinutes: windowMin,
@@ -827,6 +854,14 @@ export class EventWorker {
             { trackedName: trackedHintSweep },
         );
 
+        const sampleNftNames = await Promise.all(
+            sampleTokens.map(tid =>
+                this.nftNames
+                    .resolveNftName(contractLcSweep, String(tid), { collectionName: sweepCollectionLabel })
+                    .then(r => r.name),
+            ),
+        );
+
         for (const row of collections) {
             const minTotal = row.sweepThresholdNative ?? envMinTotal;
             if (sweep.totalNative < minTotal) continue;
@@ -855,6 +890,7 @@ export class EventWorker {
                     currency: sweep.currency,
                     tokenIds: sweep.tokenIds,
                     sampleNftMetas: sampleMetas.filter((m): m is NFTMetadata => m !== null),
+                    sampleNftNames,
                     mentionRoleId: row.mentionRoleId,
                     contextualExplanation: cxSweep,
                     aiNarrative: sweepNar ?? undefined,
