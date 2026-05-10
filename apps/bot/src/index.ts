@@ -18,9 +18,28 @@ import {
     createFloorImpactFollowupEmbed,
     createHotMintEmbed,
 } from './embeds';
+import type { ContextualExplanation } from '@superbot/types';
 import { links } from './links';
 
 dotenv.config();
+
+/** Allow only real guild roles — blocks @everyone (role id equals guild id) and bogus ids. */
+async function resolvePingableRoleId(
+    channel: TextChannel | null | undefined,
+    roleId: string | undefined | null,
+): Promise<string | undefined> {
+    const id = typeof roleId === 'string' ? roleId.trim() : '';
+    if (!id || !channel || !channel.isTextBased()) return undefined;
+    if (!('guild' in channel) || !channel.guild) return undefined;
+    try {
+        const role = await channel.guild.roles.fetch(id);
+        if (!role) return undefined;
+        if (role.guild.id === role.id) return undefined;
+        return role.id;
+    } catch {
+        return undefined;
+    }
+}
 
 function nftMarketplaceButtons(contract: string, tokenId: string): ButtonBuilder[] {
     return [
@@ -85,6 +104,7 @@ export class SuperBot {
 
         this.client.once('ready', async () => {
             await this.ensureGuildRowsForConnectedServers();
+            console.log('[Bot] Contextual intelligence deterministic engine ready (embed layer).');
             const prismaIds = (await prisma.guild.findMany({ select: { discordId: true } })).map(g => g.discordId);
             const cacheIds = [...this.client.guilds.cache.keys()];
             const guildIds = [...new Set([...prismaIds, ...cacheIds])];
@@ -244,9 +264,16 @@ export class SuperBot {
                 return;
             }
 
+            const validatedRoleId = await resolvePingableRoleId(channel, data.mentionRoleId);
+            if (validatedRoleId !== data.mentionRoleId?.trim?.() && data.mentionRoleId) {
+                console.warn(
+                    `[Delivery] Disabled invalid or unsafe ping role="${data.mentionRoleId}" for ${alertType} channel=${channelId}`,
+                );
+            }
+
             let content = '';
-            if (data.mentionRoleId) {
-                content = `<@&${data.mentionRoleId}>`;
+            if (validatedRoleId) {
+                content = `<@&${validatedRoleId}>`;
             }
 
             if (alertType === 'WHALE_BUY' || alertType === 'WHALE_SALE' || alertType === 'WHALE_MINT') {
@@ -282,7 +309,7 @@ export class SuperBot {
                     content, 
                     embeds: [embed], 
                     components: [row],
-                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] }
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] }
                 });
             } else if (alertType === 'MINT_RADAR') {
                 const embed = createMintAlertEmbed({
@@ -300,14 +327,14 @@ export class SuperBot {
                     content, 
                     embeds: [embed], 
                     components: [row],
-                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] }
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] }
                 });
             } else if (alertType === 'FLOOR_UPDATE') {
                 const embed = createFloorUpdateEmbed(data);
                 await channel.send({ 
                     content, 
                     embeds: [embed],
-                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] }
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] }
                 });
             } else if (alertType === 'SWEEP') {
                 const embed = createSweepEmbed({
@@ -323,6 +350,8 @@ export class SuperBot {
                     collectionMeta: data.collectionMeta ?? null,
                     buyerProfile: data.buyerProfile ?? null,
                     sampleNftMetas: Array.isArray(data.sampleNftMetas) ? data.sampleNftMetas : [],
+                    contextualExplanation: data.contextualExplanation ?? null,
+                    aiNarrative: data.aiNarrative ?? undefined,
                 });
                 const sweepSlug =
                     data.collectionMeta?.slug ??
@@ -339,7 +368,7 @@ export class SuperBot {
                     content,
                     embeds: [embed],
                     components: [row],
-                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
             } else if (alertType === 'MASS_LISTING') {
                 const massSlug = data.collectionMeta?.slug ?? null;
@@ -355,6 +384,8 @@ export class SuperBot {
                             ? data.floorBeforeEth
                             : null,
                     floorImpactPending: Boolean(data.floorImpactPending),
+                    contextualExplanation: data.contextualExplanation ?? null,
+                    aiNarrative: data.aiNarrative ?? undefined,
                 });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     ...collectionMarketplaceButtons(data.contract, massSlug),
@@ -363,7 +394,7 @@ export class SuperBot {
                     content,
                     embeds: [embed],
                     components: [row],
-                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
                 if (eventId && sent?.id) {
                     try {
@@ -387,6 +418,8 @@ export class SuperBot {
                             ? data.floorBeforeEth
                             : null,
                     floorImpactPending: Boolean(data.floorImpactPending),
+                    contextualExplanation: data.contextualExplanation ?? null,
+                    aiNarrative: data.aiNarrative ?? undefined,
                 });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     ...collectionMarketplaceButtons(data.contract, slug),
@@ -395,7 +428,7 @@ export class SuperBot {
                     content,
                     embeds: [embed],
                     components: [row],
-                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
                 if (eventId && sent?.id) {
                     try {
@@ -423,6 +456,8 @@ export class SuperBot {
                     blockRange: String(data.blockRange || '—'),
                     topMinerLines: Array.isArray(data.topMinerLines) ? data.topMinerLines : [],
                     collectionMeta: data.collectionMeta ?? null,
+                    contextualExplanation: data.contextualExplanation ?? null,
+                    aiNarrative: data.aiNarrative ?? undefined,
                 });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     ...collectionMarketplaceButtons(data.contract, slug),
@@ -431,7 +466,7 @@ export class SuperBot {
                     content,
                     embeds: [embed],
                     components: [row],
-                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
             } else if (alertType === 'FLOOR_DROP' || alertType === 'FLOOR_RISE') {
                 const embed = createFloorMovementEmbed({
@@ -442,11 +477,13 @@ export class SuperBot {
                     pctChange: data.pctChange,
                     currency: data.currency,
                     direction: alertType === 'FLOOR_DROP' ? 'drop' : 'rise',
+                    contextualExplanation: data.contextualExplanation ?? null,
+                    aiNarrative: data.aiNarrative ?? undefined,
                 });
                 await channel.send({
                     content,
                     embeds: [embed],
-                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
             } else if (alertType === 'CLUSTER_BUY') {
                 const triggerTxHash = String(data.triggerTxHash || data.txHash || '');
@@ -460,6 +497,8 @@ export class SuperBot {
                     triggerBuyer: data.triggerBuyer || '',
                     collectionMeta: data.collectionMeta ?? null,
                     triggerProfile: data.triggerProfile ?? null,
+                    contextualExplanation: data.contextualExplanation ?? null,
+                    aiNarrative: data.aiNarrative ?? undefined,
                 });
                 const slug = data.collectionMeta?.slug ?? null;
                 const marketplaceRow = new ActionRowBuilder<ButtonBuilder>().addComponents(
@@ -481,7 +520,7 @@ export class SuperBot {
                     content,
                     embeds: [embed],
                     components,
-                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
             }
 
@@ -507,6 +546,8 @@ export class SuperBot {
         floorBefore: number | null;
         floorAfter: number | null;
         pctChange: number | null;
+        contextualExplanation?: ContextualExplanation | null;
+        aiNarrative?: string;
     }) {
         const deliveryKey = data.deliveryKey;
         const eventId = data.eventId;
@@ -543,6 +584,8 @@ export class SuperBot {
                 floorBefore: data.floorBefore,
                 floorAfter: data.floorAfter,
                 pctChange: data.pctChange,
+                contextualExplanation: data.contextualExplanation ?? null,
+                aiNarrative: data.aiNarrative ?? undefined,
             });
 
             const orig = await channel.messages.fetch(data.replyToMessageId);

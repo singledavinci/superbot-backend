@@ -8,6 +8,11 @@ import {
     OpenSeaSalesClient,
     SalesProvider,
 } from '@superbot/analytics';
+import {
+    explainMassListing,
+    explainMassDelist,
+    summarizeFactsWithOptionalAi,
+} from '@superbot/intelligence';
 
 dotenv.config();
 
@@ -183,6 +188,11 @@ export class MarketIndexer {
                         minListings: minForContract,
                     });
                     if (det) {
+                        try {
+                            await redisConnection.set(`intel:listing_surge:${det.contract.toLowerCase()}`, '1', 'EX', 900);
+                        } catch {
+                            /* best-effort */
+                        }
                         await this.dispatchMassListing(det, floorBefore);
                     }
                 }
@@ -260,6 +270,17 @@ export class MarketIndexer {
 
             const eventId = `${det.contract}:${det.bucketStart}:${row.id}`;
 
+            const cxMass = explainMassListing({
+                listingCount: det.count,
+                windowMs: det.windowMs,
+                floorBeforeEth:
+                    typeof floorBefore === 'number' && floorBefore > 0 ? floorBefore : null,
+            });
+            const massNar = await summarizeFactsWithOptionalAi({
+                explanation: cxMass,
+                jobCacheKey: eventId,
+            });
+
             await discordQueue.add(
                 'discord_alert',
                 {
@@ -275,6 +296,8 @@ export class MarketIndexer {
                     mentionRoleId: row.mentionRoleId,
                     floorBeforeEth: floorBefore,
                     floorImpactPending: true,
+                    contextualExplanation: cxMass,
+                    aiNarrative: massNar ?? undefined,
                 },
                 {
                     jobId: `mass-listing-${row.id}-${det.bucketStart}-${minListings}`,
@@ -326,6 +349,17 @@ export class MarketIndexer {
 
             const eventId = `delist:${det.contract}:${det.bucketStart}:${row.id}`;
 
+            const cxDel = explainMassDelist({
+                delistCount: det.count,
+                windowMs: det.windowMs,
+                floorBeforeEth:
+                    typeof floorBefore === 'number' && floorBefore > 0 ? floorBefore : null,
+            });
+            const delNar = await summarizeFactsWithOptionalAi({
+                explanation: cxDel,
+                jobCacheKey: eventId,
+            });
+
             await discordQueue.add(
                 'discord_alert',
                 {
@@ -342,6 +376,8 @@ export class MarketIndexer {
                     mentionRoleId: row.mentionRoleId,
                     floorBeforeEth: floorBefore,
                     floorImpactPending: true,
+                    contextualExplanation: cxDel,
+                    aiNarrative: delNar ?? undefined,
                 },
                 {
                     jobId: `mass-delist-${row.id}-${det.bucketStart}-${this.massDelistMinDefault}`,

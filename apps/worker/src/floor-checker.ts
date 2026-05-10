@@ -2,6 +2,7 @@ import { prisma } from '@superbot/database';
 import { discordQueue as discordDeliveryQueue } from '@superbot/queue';
 import { redisConnection } from '@superbot/queue';
 import { FloorProvider } from '@superbot/analytics';
+import { explainFloorMovement, summarizeFactsWithOptionalAi } from '@superbot/intelligence';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -93,6 +94,18 @@ export class FloorWorker {
                         item.alertChannelId
                     ) {
                         const eventId = `floor-drop:${contract}:${hourBucket}`;
+                        const cxDrop = explainFloorMovement({
+                            direction: 'drop',
+                            floorPrice: current.priceNative,
+                            prevFloor: prev.priceNative,
+                            pctChange: dropPct,
+                            currency: current.currency,
+                            hasCorroboration: false,
+                        });
+                        const narrDrop = await summarizeFactsWithOptionalAi({
+                            explanation: cxDrop,
+                            jobCacheKey: `floor-drop-${item.id}-${hourBucket}`,
+                        });
                         await discordDeliveryQueue.add(
                             'discord_alert',
                             {
@@ -106,6 +119,8 @@ export class FloorWorker {
                                 pctChange: dropPct,
                                 currency: current.currency,
                                 mentionRoleId: item.mentionRoleId,
+                                contextualExplanation: cxDrop,
+                                aiNarrative: narrDrop ?? undefined,
                             },
                             {
                                 jobId: `floor-drop-${item.id}-${hourBucket}`,
@@ -121,6 +136,18 @@ export class FloorWorker {
                         item.alertChannelId
                     ) {
                         const eventId = `floor-rise:${contract}:${hourBucket}`;
+                        const cxRise = explainFloorMovement({
+                            direction: 'rise',
+                            floorPrice: current.priceNative,
+                            prevFloor: prev.priceNative,
+                            pctChange: risePct,
+                            currency: current.currency,
+                            hasCorroboration: false,
+                        });
+                        const narrRise = await summarizeFactsWithOptionalAi({
+                            explanation: cxRise,
+                            jobCacheKey: `floor-rise-${item.id}-${hourBucket}`,
+                        });
                         await discordDeliveryQueue.add(
                             'discord_alert',
                             {
@@ -134,6 +161,8 @@ export class FloorWorker {
                                 pctChange: risePct,
                                 currency: current.currency,
                                 mentionRoleId: item.mentionRoleId,
+                                contextualExplanation: cxRise,
+                                aiNarrative: narrRise ?? undefined,
                             },
                             {
                                 jobId: `floor-rise-${item.id}-${hourBucket}`,

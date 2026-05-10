@@ -3,7 +3,6 @@ import { redisConnection, discordQueue as discordDeliveryQueue } from '@superbot
 import { prisma } from '@superbot/database';
 import {
     clickhouse,
-    SmartMoneyProfiler,
     SweepDetector,
     SmartMoneyClusterDetector,
     NFTMetadataClient,
@@ -20,8 +19,19 @@ import {
     type HotMintDetection,
 } from '@superbot/analytics';
 import { SniperEngine } from '@superbot/utils';
-import { ContextEngine, SaleDetector } from '@superbot/intelligence';
+import {
+    SaleDetector,
+    explainWhale,
+    contextualToIntelligenceReport,
+    summarizeFactsWithOptionalAi,
+    explainSweep,
+    explainClusterBuy,
+    explainHotMint,
+    explainFloorImpactFollowup,
+    type WhaleContextMetrics,
+} from '@superbot/intelligence';
 import type { JsonRpcProvider } from 'ethers';
+import type { IntelligenceReport } from '@superbot/types';
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 
@@ -33,8 +43,6 @@ function shortEthAddr(addr: string): string {
 
 export class EventWorker {
     private snipers = new Map<string, SniperEngine>();
-    private profiler = new SmartMoneyProfiler();
-    private contextEngine = new ContextEngine();
     private sweepDetector = new SweepDetector();
     private clusterDetector = new SmartMoneyClusterDetector();
     private saleDetectors = new Map<string, SaleDetector>();
@@ -51,6 +59,12 @@ export class EventWorker {
     private walletProfiles = new WalletProfileClient({ redis: redisConnection });
     private hotMintDetector = new HotMintDetector();
     private openSeaFloor = new OpenSeaSalesClient();
+
+    /** Sliding window for correlated tracked-wallet intel (default 60 minutes). */
+    private INTEL_WINDOW_MS =
+        Number(process.env.INTEL_ACTIVITY_WINDOW_MS) > 0
+            ? Number(process.env.INTEL_ACTIVITY_WINDOW_MS)
+            : 60 * 60 * 1000;
 
     constructor() {
         // Ethereum-only deployment. Re-add other chains here together with their
@@ -77,6 +91,7 @@ export class EventWorker {
 
     public async start() {
         console.log('👷 Event Worker started. Processing high-velocity NFT events...');
+        console.log('[Worker] Contextual intelligence deterministic layer online (deterministic explanations; optional AI).');
 
         // Match the queue published by the indexer (`packages/queue` exports `eventQueue` -> 'blockchain_events').
         const worker = new Worker('blockchain_events', async (job: Job) => {
@@ -141,6 +156,56 @@ export class EventWorker {
         }
     }
 
+    private whaleIntelZKey(kind: 'buy' | 'sell' | 'mint', guildId: string, contractLc: string): string {
+        return `intel:z:${kind}:${guildId}:${contractLc}`;
+    }
+
+    private async intelWindowDistinct(
+        key: string,
+        nowMs: number,
+    ): Promise<{ distinct: number; events: number }> {
+        const minScore = nowMs - this.INTEL_WINDOW_MS;
+        try {
+            const members = await redisConnection.zrangebyscore(key, String(minScore), '+inf');
+            const wallets = new Set<string>();
+            for (const entry of members) {
+                const m = String(entry).split(':')[0]?.toLowerCase();
+                if (m) wallets.add(m);
+            }
+            return { distinct: wallets.size, events: members.length };
+        } catch (err) {
+            console.warn('[Worker] intelWindowDistinct failed:', err);
+            return { distinct: 0, events: 0 };
+        }
+    }
+
+    private async intelWindowRegister(key: string, nowMs: number, member: string): Promise<void> {
+        try {
+            await redisConnection.zadd(key, nowMs, member);
+            await redisConnection.zremrangebyscore(key, 0, nowMs - this.INTEL_WINDOW_MS);
+        } catch (err) {
+            console.warn('[Worker] intelWindowRegister failed:', err);
+        }
+    }
+
+    private async floorVsSnapshotPct(
+        chainLc: string,
+        contractLc: string,
+        floorNow: number | null,
+    ): Promise<number | null> {
+        if (floorNow === null || floorNow <= 0) return null;
+        try {
+            const snapRaw = await redisConnection.get(`floor_snapshot:${chainLc}:${contractLc}`);
+            if (!snapRaw) return null;
+            const snap = JSON.parse(snapRaw) as { priceNative?: number };
+            const prev = snap.priceNative;
+            if (typeof prev !== 'number' || !(prev > 0)) return null;
+            return ((floorNow - prev) / prev) * 100;
+        } catch {
+            return null;
+        }
+    }
+
     private async handleFloorImpactJob(data: {
         originalEventId: string;
         channelId: string;
@@ -188,6 +253,17 @@ export class EventWorker {
 
         const deliveryKey = `FLOOR_IMPACT_FOLLOWUP:${originalEventId}:${channelId}`;
 
+        const cxImpact = explainFloorImpactFollowup({
+            originalAlertType: data.alertType,
+            floorBefore,
+            floorAfter,
+            pctChange,
+        });
+        const impactNarrative = await summarizeFactsWithOptionalAi({
+            explanation: cxImpact,
+            jobCacheKey: deliveryKey,
+        });
+
         await discordDeliveryQueue.add(
             'floor_impact_followup',
             {
@@ -200,6 +276,8 @@ export class EventWorker {
                 floorBefore,
                 floorAfter: floorAfter !== null ? floorAfter : null,
                 pctChange,
+                contextualExplanation: cxImpact,
+                aiNarrative: impactNarrative ?? undefined,
             },
             {
                 jobId: `floor-followup-discord:${originalEventId}:${channelId}`,
@@ -384,20 +462,29 @@ export class EventWorker {
             price = String(effectivePriceEth);
         }
 
+        const tsMillis =
+            jobTs !== undefined && jobTs > 0
+                ? jobTs > 1e12
+                  ? jobTs
+                  : jobTs * 1000
+                : Date.now();
+
         // 3. Analytics Persistence (ClickHouse)
         try {
             await clickhouse.insert({
                 table: 'superbot_analytics.whale_trades',
-                values: [{
-                    timestamp: new Date(),
-                    chain,
-                    contract,
-                    whale_address: eventType === 'SALE' ? (price === '0' ? from : to) : to, 
-                    trade_type: eventType,
-                    usd_value: 0, 
-                    tx_hash: txHash
-                }],
-                format: 'JSONEachRow'
+                values: [
+                    {
+                        timestamp: new Date(tsMillis),
+                        chain,
+                        contract,
+                        whale_address: eventType === 'SALE' ? (price === '0' ? from : to) : to,
+                        trade_type: eventType,
+                        usd_value: 0,
+                        tx_hash: txHash,
+                    },
+                ],
+                format: 'JSONEachRow',
             });
         } catch (err) {
             console.error('[Worker] ClickHouse insert failed:', err);
@@ -434,6 +521,17 @@ export class EventWorker {
             );
         }
 
+        const contractLcEff = contract.toLowerCase();
+        const floorIntel = await this.readFloorNativeCachedOrOpenSea(chainLc, contractLcEff);
+        const floorPctIntel = await this.floorVsSnapshotPct(chainLc, contractLcEff, floorIntel);
+        let listingSurgeSuspectedFlag = false;
+        try {
+            listingSurgeSuspectedFlag =
+                (await redisConnection.get(`intel:listing_surge:${contractLcEff}`)) === '1';
+        } catch {
+            listingSurgeSuspectedFlag = false;
+        }
+
         for (const gid of uniqueGuildIds) {
             const guild = await prisma.guild.findUnique({
                 where: { id: gid },
@@ -456,11 +554,60 @@ export class EventWorker {
                     continue;
                 }
 
-                const profile = await this.profiler.getWalletProfile(to);
-                const intelligence = this.contextEngine.analyzeWhaleBuy(profile, true, null, null, null);
-
                 const isSeller =
                     wallet.address.toLowerCase() === from.toLowerCase();
+                const behavior: WhaleContextMetrics['behavior'] =
+                    eventType === 'MINT' ? 'mint' : isSeller ? 'sell' : 'buy';
+                const zKind: 'mint' | 'sell' | 'buy' =
+                    behavior === 'mint' ? 'mint' : behavior === 'sell' ? 'sell' : 'buy';
+                const zk = this.whaleIntelZKey(zKind, wallet.guildId, contractLcEff);
+                const counted = await this.intelWindowDistinct(zk, Date.now());
+
+                let recentTrackedSellsDistinctWallets: number | undefined;
+                if (behavior === 'sell') {
+                    recentTrackedSellsDistinctWallets = counted.distinct;
+                } else {
+                    const sells = await this.intelWindowDistinct(
+                        this.whaleIntelZKey('sell', wallet.guildId, contractLcEff),
+                        Date.now(),
+                    );
+                    recentTrackedSellsDistinctWallets = sells.distinct;
+                }
+
+                const whaleMetrics: WhaleContextMetrics = {
+                    behavior,
+                    focalWalletTracked: true,
+                    priceEth: effectivePriceEth > 0 ? effectivePriceEth : null,
+                    currency,
+                    marketplace: marketplace || 'Unknown',
+                    possibleWashTrading: possibleWashTrading || false,
+                    distinctWalletsInWindow: counted.distinct,
+                    eventsInWindow: counted.events,
+                    windowMinutes: Math.max(1, Math.round(this.INTEL_WINDOW_MS / 60000)),
+                    floorEth: floorIntel,
+                    floorVsSnapshotPct: floorPctIntel,
+                    listingSurgeSuspected: listingSurgeSuspectedFlag,
+                    recentTrackedSellsDistinctWallets,
+                };
+
+                const cxWhale = explainWhale(whaleMetrics);
+                const jobCacheKeyPre = `alert-${wallet.id}-${eventId}-${channelId}`;
+                const narrativeWhale = await summarizeFactsWithOptionalAi({
+                    explanation: cxWhale,
+                    jobCacheKey: jobCacheKeyPre,
+                });
+                const intelligence: IntelligenceReport = contextualToIntelligenceReport(
+                    cxWhale,
+                    narrativeWhale,
+                );
+
+                const focalForMember = wallet.address.toLowerCase();
+                await this.intelWindowRegister(
+                    zk,
+                    Date.now(),
+                    `${focalForMember}:${txHash}:${tokenId}`,
+                );
+
                 const focusProfile = isSeller ? sellerProfile : buyerProfile;
                 const counterpartyProfile = isSeller ? buyerProfile : sellerProfile;
 
@@ -568,6 +715,16 @@ export class EventWorker {
             this.safeFetchWallet(det.triggerBuyer),
         ]);
 
+        const cxCluster = explainClusterBuy({
+            walletCount: det.buyers.length,
+            windowMinutes: windowMin,
+            chain: det.chain,
+        });
+        const clusterNar = await summarizeFactsWithOptionalAi({
+            explanation: cxCluster,
+            jobCacheKey: `cluster-${det.guildDbId}-${det.eventId}`,
+        });
+
         await discordDeliveryQueue.add(
             'discord_alert',
             {
@@ -584,6 +741,8 @@ export class EventWorker {
                 triggerBuyer: det.triggerBuyer,
                 triggerProfile,
                 mentionRoleId: row?.mentionRoleId ?? null,
+                contextualExplanation: cxCluster,
+                aiNarrative: clusterNar ?? undefined,
             },
             {
                 jobId: `cluster-${det.guildDbId}-${det.eventId}`,
@@ -617,10 +776,27 @@ export class EventWorker {
             ),
         ]);
 
+        const chainLcSweep = (sweep.chain || 'ethereum').toLowerCase();
+        const contractLcSweep = sweep.contract.toLowerCase();
+        const sweepFloor = await this.readFloorNativeCachedOrOpenSea(chainLcSweep, contractLcSweep);
+        const sweepFloorPct = await this.floorVsSnapshotPct(chainLcSweep, contractLcSweep, sweepFloor);
+        const cxSweep = explainSweep({
+            itemCount: sweep.itemCount,
+            totalNative: sweep.totalNative,
+            currency: sweep.currency,
+            floorEth: sweepFloor,
+            floorVsSnapshotPct: sweepFloorPct,
+        });
+
         for (const row of collections) {
             const minTotal = row.sweepThresholdNative ?? envMinTotal;
             if (sweep.totalNative < minTotal) continue;
             if (!row.alertChannelId) continue;
+
+            const sweepNar = await summarizeFactsWithOptionalAi({
+                explanation: cxSweep,
+                jobCacheKey: `sweep-${row.id}-${sweep.eventId}`,
+            });
 
             await discordDeliveryQueue.add(
                 'discord_alert',
@@ -641,6 +817,8 @@ export class EventWorker {
                     tokenIds: sweep.tokenIds,
                     sampleNftMetas: sampleMetas.filter((m): m is NFTMetadata => m !== null),
                     mentionRoleId: row.mentionRoleId,
+                    contextualExplanation: cxSweep,
+                    aiNarrative: sweepNar ?? undefined,
                 },
                 {
                     jobId: `sweep-${row.id}-${sweep.eventId}`,
@@ -737,6 +915,24 @@ export class EventWorker {
             return `• ${label} — ${tp.count} mint${tp.count === 1 ? '' : 's'}`;
         });
 
+        const minUniqueCfg =
+            Number(process.env.HOT_MINT_MIN_UNIQUE_MINTERS) > 0
+                ? Number(process.env.HOT_MINT_MIN_UNIQUE_MINTERS)
+                : 15;
+        const minTotalCfg =
+            Number(process.env.HOT_MINT_MIN_TOTAL_MINTS) > 0
+                ? Number(process.env.HOT_MINT_MIN_TOTAL_MINTS)
+                : 25;
+        const cxHot = explainHotMint({
+            uniqueMinters: det.uniqueMinters,
+            totalMints: det.totalMints,
+            windowMinutes: windowMin,
+            velocityPerMin,
+            floorEth,
+            minUniqueConfigured: minUniqueCfg,
+            minTotalConfigured: minTotalCfg,
+        });
+
         for (const row of collections) {
             if (!row.hotMintEnabled) continue;
             const guild = guildById.get(row.guildId);
@@ -747,6 +943,11 @@ export class EventWorker {
                 console.warn(`[Worker] HOT_MINT: no channel row=${row.id} contract=${det.contract}`);
                 continue;
             }
+
+            const hotNar = await summarizeFactsWithOptionalAi({
+                explanation: cxHot,
+                jobCacheKey: `hot-mint-${row.id}-${det.eventId}`,
+            });
 
             await discordDeliveryQueue.add(
                 'discord_alert',
@@ -767,6 +968,8 @@ export class EventWorker {
                     blockRange,
                     topMinerLines,
                     mentionRoleId: row.mentionRoleId,
+                    contextualExplanation: cxHot,
+                    aiNarrative: hotNar ?? undefined,
                 },
                 {
                     jobId: `hot-mint-${row.id}-${det.eventId}`,

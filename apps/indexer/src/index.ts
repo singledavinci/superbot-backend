@@ -157,9 +157,17 @@ export class BlockchainIndexer {
     }
 
     private async backfill(chainName: string, from: number, to: number) {
-        console.log(`[Indexer] 🏗️ Backfill logic for ${chainName} would fetch logs from ${from} to ${to}`);
-        // In a real production environment, we would use provider.getLogs here.
-        // For MVP, we mark the state as caught up.
+        console.warn(
+            `[Indexer] Historical backfill is not implemented (${chainName} blocks ${from}–${to}). Some events in that gap may never be alerted. Confirmation depth=${this.CONFIRMATION_BLOCKS}.`,
+        );
+        try {
+            await prisma.syncState.update({
+                where: { chain: chainName },
+                data: { lastBlock: to },
+            });
+        } catch (err) {
+            console.warn(`[Indexer] Failed to persist post-backfill checkpoint for ${chainName}:`, err);
+        }
     }
 
     private async refreshFilters() {

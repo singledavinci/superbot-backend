@@ -15,11 +15,39 @@ export type SignalGrade =
     | 'High Risk' 
     | 'Suspicious Activity';
 
+/** Labels returned by deterministic contextual scoring (Discord-facing copy). */
+export type ContextualSignalLabel =
+    | 'Strong bullish signal'
+    | 'Weak bullish signal'
+    | 'Neutral activity'
+    | 'Weak bearish signal'
+    | 'Strong bearish signal'
+    | 'Suspicious activity'
+    | 'High-risk momentum'
+    | 'Insufficient data';
+
+export type ConfidenceLevel = 'high' | 'medium' | 'low' | 'insufficient';
+
+export interface ContextualExplanation {
+    event: string;
+    context: string;
+    signal: ContextualSignalLabel;
+    evidence: string[];
+    risk: string;
+    nextWatch: string;
+    confidence: ConfidenceLevel;
+    dataLimitations: string[];
+}
+
 export interface IntelligenceReport {
     grade: SignalGrade;
     context: string;
     risk: string | null;
     nextWatch: string;
+    /** Rich structured explanations for Discord embeds (deterministic baseline). */
+    contextual?: ContextualExplanation;
+    /** Optional plain-language recap when AI layering is enabled; never adds metrics. */
+    aiNarrative?: string | null;
 }
 
 export interface WhaleAlertData {

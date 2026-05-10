@@ -1,11 +1,46 @@
 import { EmbedBuilder } from 'discord.js';
-import { IntelligenceReport } from '@superbot/types';
+import type { IntelligenceReport, ContextualExplanation } from '@superbot/types';
 import type {
     NFTMetadata,
     CollectionMetadata,
     WalletProfile,
 } from '@superbot/analytics';
 import { links } from './links';
+
+/** Must appear on informational market/embed outputs. */
+export const STANDARD_MARKET_DISCLAIMER =
+    'Not financial advice. Signals are informational and may be incomplete or delayed.';
+
+function capitalizeConfidence(c: ContextualExplanation['confidence']): string {
+    return c.slice(0, 1).toUpperCase() + c.slice(1);
+}
+
+/** Adds the structured “Why it matters” block inside Discord field limits (≤1024 chars). */
+export function appendWhyItMattersEmbed(
+    embed: EmbedBuilder,
+    cx: ContextualExplanation,
+    aiNarrative?: string | null,
+) {
+    const ev = cx.evidence.slice(0, 4);
+    const chunks: string[] = [
+        `**Event:** ${cx.event}`,
+        `**Signal:** ${cx.signal}`,
+        '**Evidence:**',
+        ...ev.map(e => `• ${e}`),
+        `**Risk:** ${cx.risk}`,
+        `**Next watch:** ${cx.nextWatch}`,
+        `**Confidence:** ${capitalizeConfidence(cx.confidence)}`,
+    ];
+    if (cx.dataLimitations.length > 0) {
+        chunks.push(`**Data limitations:** ${cx.dataLimitations.slice(0, 3).join('; ')}`);
+    }
+    if (aiNarrative?.trim()) {
+        chunks.push(`**Plain recap:** ${aiNarrative.trim().slice(0, 380)}`);
+    }
+    let body = chunks.join('\n').trim();
+    if (body.length > 1000) body = `${body.slice(0, 990)}…`;
+    embed.addFields({ name: 'Why it matters', value: body, inline: false });
+}
 
 /** Truncate a 0x-prefixed hex address for display: 0x1234…abcd. */
 function shortAddr(addr: string | null | undefined, prefix = 6, suffix = 4): string {
@@ -172,13 +207,16 @@ export function createWhaleBuyEmbed(data: {
         });
     }
 
-    embed.addFields({
-        name: '🧠 AI Context Engine',
-        value: `*${data.intelligence?.context || 'No context available.'}*`,
-    });
-
-    if (data.intelligence?.risk) {
-        embed.addFields({ name: '⚠️ Risk', value: `*${data.intelligence.risk}*` });
+    if (data.intelligence?.contextual) {
+        appendWhyItMattersEmbed(embed, data.intelligence.contextual, data.intelligence.aiNarrative);
+    } else {
+        embed.addFields({
+            name: '🧠 Context',
+            value: `*${data.intelligence?.context || 'No context available.'}*`,
+        });
+        if (data.intelligence?.risk) {
+            embed.addFields({ name: '⚠️ Risk', value: `*${data.intelligence.risk}*` });
+        }
     }
 
     if (data.possibleWashTrading) {
@@ -197,11 +235,9 @@ export function createWhaleBuyEmbed(data: {
     });
     if (linkLine) embed.addFields({ name: 'Links', value: linkLine, inline: false });
 
-    embed
-        .setTimestamp()
-        .setFooter({
-            text: 'SuperBot Intelligence • Not financial advice. Signals are informational and may be incomplete or delayed.',
-        });
+    embed.setTimestamp().setFooter({
+        text: `SuperBot Intelligence • ${STANDARD_MARKET_DISCLAIMER}`,
+    });
 
     return embed;
 }
@@ -216,6 +252,8 @@ export function createClusterBuyEmbed(data: {
     triggerBuyer: string;
     collectionMeta?: CollectionMetadata | null;
     triggerProfile?: WalletProfile | null;
+    contextualExplanation?: ContextualExplanation | null;
+    aiNarrative?: string | null;
 }) {
     const sample = data.wallets.slice(0, 12).join(', ') + (data.wallets.length > 12 ? '…' : '');
     const collectionLabel = data.collectionMeta?.name || data.collectionName;
@@ -266,15 +304,17 @@ export function createClusterBuyEmbed(data: {
         });
     }
 
+    if (data.contextualExplanation) {
+        appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
+    }
+
     embed.addFields({
         name: 'Links',
         value: markdownCollectionToolkit(data.contract, data.collectionMeta?.slug),
         inline: false,
     });
 
-    return embed
-        .setTimestamp()
-        .setFooter({ text: 'SuperBot Smart-Money • Not financial advice' });
+    return embed.setTimestamp().setFooter({ text: `SuperBot Smart-Money • ${STANDARD_MARKET_DISCLAIMER}` });
 }
 
 export function createMintAlertEmbed(data: {
@@ -322,11 +362,9 @@ export function createMintAlertEmbed(data: {
         inline: false,
     });
 
-    embed
-        .setTimestamp()
-        .setFooter({
-            text: 'SuperBot Mint Radar • Not financial advice. Signals are informational and may be incomplete or delayed.',
-        });
+    embed.setTimestamp().setFooter({
+        text: `SuperBot Mint Radar • ${STANDARD_MARKET_DISCLAIMER}`,
+    });
 
     return embed;
 }
@@ -344,6 +382,8 @@ export function createSweepEmbed(data: {
     collectionMeta?: CollectionMetadata | null;
     buyerProfile?: WalletProfile | null;
     sampleNftMetas?: NFTMetadata[];
+    contextualExplanation?: ContextualExplanation | null;
+    aiNarrative?: string | null;
 }) {
     const collectionLabel = data.collectionMeta?.name || data.collectionName;
     const shortTokens =
@@ -408,15 +448,17 @@ export function createSweepEmbed(data: {
         data.collectionMeta?.slug ??
         data.sampleNftMetas?.find(m => m.collectionSlug)?.collectionSlug ??
         null;
+    if (data.contextualExplanation) {
+        appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
+    }
+
     embed.addFields({
         name: 'Links',
         value: markdownCollectionToolkit(data.contract, collectionSlug),
         inline: false,
     });
 
-    return embed
-        .setTimestamp()
-        .setFooter({ text: 'SuperBot Market Intelligence • Not financial advice' });
+    return embed.setTimestamp().setFooter({ text: `SuperBot Market Intelligence • ${STANDARD_MARKET_DISCLAIMER}` });
 }
 
 export function createMassListingEmbed(data: {
@@ -429,6 +471,8 @@ export function createMassListingEmbed(data: {
     /** Floor snapshot when the surge fired (omit if unavailable). */
     floorBeforeEth?: number | null;
     floorImpactPending?: boolean;
+    contextualExplanation?: ContextualExplanation | null;
+    aiNarrative?: string | null;
 }) {
     const mins = Math.round(data.windowMs / 60000) || 1;
     const slug = data.collectionMeta?.slug?.trim() || null;
@@ -457,9 +501,13 @@ export function createMassListingEmbed(data: {
         embed.addFields({ name: 'Floor at trigger', value: floor, inline: true });
     }
 
+    if (data.contextualExplanation) {
+        appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
+    }
+
     embed.addFields({ name: 'Links', value: markdownCollectionToolkit(data.contract, slug), inline: false });
 
-    const base = 'SuperBot Market Intelligence • Not financial advice';
+    const base = `SuperBot Market Intelligence • ${STANDARD_MARKET_DISCLAIMER}`;
     const footerText = data.floorImpactPending
         ? `${base} • Checking floor impact in ~10 minutes.`
         : base;
@@ -476,6 +524,8 @@ export function createMassDelistEmbed(data: {
     collectionMeta?: CollectionMetadata | null;
     floorBeforeEth?: number | null;
     floorImpactPending?: boolean;
+    contextualExplanation?: ContextualExplanation | null;
+    aiNarrative?: string | null;
 }) {
     const mins = Math.round(data.windowMs / 60000) || 1;
     const slug = data.collectionMeta?.slug?.trim() || null;
@@ -512,9 +562,13 @@ export function createMassDelistEmbed(data: {
         embed.addFields({ name: 'Floor at trigger', value: floor, inline: true });
     }
 
+    if (data.contextualExplanation) {
+        appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
+    }
+
     embed.addFields({ name: 'Links', value: markdownCollectionToolkit(data.contract, slug), inline: false });
 
-    const base = 'SuperBot Market Intelligence • Not financial advice';
+    const base = `SuperBot Market Intelligence • ${STANDARD_MARKET_DISCLAIMER}`;
     const footerText = data.floorImpactPending
         ? `${base} • Checking floor impact in ~10 minutes.`
         : base;
@@ -528,6 +582,8 @@ export function createFloorImpactFollowupEmbed(data: {
     floorBefore: number | null;
     floorAfter: number | null;
     pctChange: number | null;
+    contextualExplanation?: ContextualExplanation | null;
+    aiNarrative?: string | null;
 }) {
     const colorHex = embedColorFloorImpactFollowup(data.alertType, data.pctChange);
 
@@ -544,7 +600,7 @@ export function createFloorImpactFollowupEmbed(data: {
             ? `${data.pctChange >= 0 ? '+' : ''}${data.pctChange.toFixed(2)}%`
             : '—';
 
-    return new EmbedBuilder()
+    const embed = new EmbedBuilder()
         .setColor(colorHex)
         .setTitle('Floor observation (10 min later)')
         .setDescription(data.contract ? `Contract \`${shortAddr(data.contract)}\`` : '')
@@ -553,8 +609,15 @@ export function createFloorImpactFollowupEmbed(data: {
             { name: 'Floor now', value: after, inline: true },
             { name: 'Change', value: ch, inline: true },
         )
-        .setTimestamp()
-        .setFooter({ text: 'SuperBot Market Intelligence • Informational snapshot only' });
+        .setTimestamp();
+
+    if (data.contextualExplanation) {
+        appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
+    }
+
+    embed.setFooter({ text: `SuperBot • ${STANDARD_MARKET_DISCLAIMER}` });
+
+    return embed;
 }
 
 function embedColorFloorImpactFollowup(
@@ -581,6 +644,8 @@ export function createHotMintEmbed(data: {
     blockRange: string;
     topMinerLines: string[];
     collectionMeta?: CollectionMetadata | null;
+    contextualExplanation?: ContextualExplanation | null;
+    aiNarrative?: string | null;
 }) {
     const slug = data.collectionMeta?.slug?.trim() || null;
     const pct =
@@ -611,7 +676,6 @@ export function createHotMintEmbed(data: {
             inline: false,
         },
         { name: 'Block range', value: data.blockRange, inline: false },
-        { name: '🧠 AI signal', value: 'None', inline: false },
         {
             name: 'Links',
             value: [
@@ -622,9 +686,13 @@ export function createHotMintEmbed(data: {
         },
     );
 
-    return embed
-        .setTimestamp()
-        .setFooter({ text: 'SuperBot Mint Intelligence • Not financial advice • Ethereum only' });
+    if (data.contextualExplanation) {
+        appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
+    }
+
+    return embed.setTimestamp().setFooter({
+        text: `SuperBot Mint Intelligence • ${STANDARD_MARKET_DISCLAIMER} • Ethereum only`,
+    });
 }
 
 export function createFloorMovementEmbed(data: {
@@ -635,12 +703,14 @@ export function createFloorMovementEmbed(data: {
     pctChange: number;
     currency: string;
     direction: 'drop' | 'rise';
+    contextualExplanation?: ContextualExplanation | null;
+    aiNarrative?: string | null;
 }) {
     const isDrop = data.direction === 'drop';
     const title = isDrop ? '📉 Floor dropped' : '📈 Floor climbed';
     const color = isDrop ? '#ef4444' : '#22c55e';
 
-    return new EmbedBuilder()
+    const embed = new EmbedBuilder()
         .setColor(color)
         .setTitle(title)
         .setDescription(`**${data.collectionName}**`)
@@ -651,8 +721,14 @@ export function createFloorMovementEmbed(data: {
             { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: false },
             { name: 'Links', value: markdownCollectionToolkit(data.contract, null), inline: false },
         )
-        .setTimestamp()
-        .setFooter({ text: 'SuperBot Market Data • Not financial advice' });
+        .setTimestamp();
+
+    if (data.contextualExplanation) {
+        appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
+    }
+
+    embed.setFooter({ text: `SuperBot Market Data • ${STANDARD_MARKET_DISCLAIMER}` });
+    return embed;
 }
 
 export function createFloorUpdateEmbed(data: {
@@ -671,7 +747,7 @@ export function createFloorUpdateEmbed(data: {
             { name: 'Links', value: markdownCollectionToolkit(data.contract, null), inline: false },
         )
         .setTimestamp()
-        .setFooter({ text: 'SuperBot Market Data • Not financial advice' });
+        .setFooter({ text: `SuperBot Market Data • ${STANDARD_MARKET_DISCLAIMER}` });
 
     return embed;
 }
