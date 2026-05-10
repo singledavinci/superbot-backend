@@ -62,7 +62,13 @@ export class ReservoirSalesClient {
     }
 
     public isConfigured(): boolean {
-        return Boolean(this.apiKey) && this.apiKey !== 'optional_reservoir_key_here';
+        if (!this.apiKey) return false;
+        const v = this.apiKey.trim().toLowerCase();
+        if (!v) return false;
+        if (v === 'optional_reservoir_key_here') return false;
+        if (v.startsWith('placeholder')) return false;
+        if (v === 'changeme' || v === 'todo' || v === 'tbd') return false;
+        return true;
     }
 
     /**
