@@ -161,6 +161,10 @@ export class AlchemySalesClient implements SalesProvider {
         return { listings: [] };
     }
 
+    public async fetchCancellations(_args: FetchListingsArgs): Promise<FetchListingsResult> {
+        return { listings: [] };
+    }
+
     public async fetchFloor(_args: FetchFloorArgs): Promise<FetchFloorResult | null> {
         return null;
     }

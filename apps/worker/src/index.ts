@@ -8,6 +8,8 @@ import {
     SmartMoneyClusterDetector,
     NFTMetadataClient,
     WalletProfileClient,
+    HotMintDetector,
+    OpenSeaSalesClient,
     createRpcPoolFromEnv,
     resolveHttpRpcUrl,
     type NormalizedSale,
@@ -15,12 +17,19 @@ import {
     type ClusterBuyDetection,
     type NFTMetadata,
     type WalletProfile,
+    type HotMintDetection,
 } from '@superbot/analytics';
 import { SniperEngine } from '@superbot/utils';
 import { ContextEngine, SaleDetector } from '@superbot/intelligence';
 import type { JsonRpcProvider } from 'ethers';
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
+
+function shortEthAddr(addr: string): string {
+    if (!addr) return '—';
+    if (addr.length <= 12) return addr;
+    return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
+}
 
 export class EventWorker {
     private snipers = new Map<string, SniperEngine>();
@@ -40,6 +49,8 @@ export class EventWorker {
      */
     private nftMetadata = new NFTMetadataClient({ redis: redisConnection });
     private walletProfiles = new WalletProfileClient({ redis: redisConnection });
+    private hotMintDetector = new HotMintDetector();
+    private openSeaFloor = new OpenSeaSalesClient();
 
     constructor() {
         // Ethereum-only deployment. Re-add other chains here together with their
@@ -60,6 +71,8 @@ export class EventWorker {
                 console.warn('[Worker] No Ethereum RPC URL configured; sale detection will be disabled.');
             }
         }
+
+        console.log('[Worker] HotMintDetector initialized (Ethereum, tracked collections).');
     }
 
     public async start() {
@@ -88,6 +101,112 @@ export class EventWorker {
         worker.on('failed', (job, err) => {
             console.error(`❌ Job ${job?.id} failed:`, err);
         });
+
+        const floorWorker = new Worker(
+            'floor_impact',
+            async (job: Job) => {
+                await this.handleFloorImpactJob(job.data);
+            },
+            { connection: redisConnection, concurrency: 2 },
+        );
+        floorWorker.on('failed', (job, err) => {
+            console.error(`❌ floor_impact job ${job?.id} failed:`, err);
+        });
+    }
+
+    private async readFloorNativeCachedOrOpenSea(chain: string, contract: string): Promise<number | null> {
+        const ch = (chain || 'ethereum').toLowerCase();
+        const c = contract.toLowerCase();
+        try {
+            const raw = await redisConnection.get(`floor:${ch}:${c}`);
+            if (raw) {
+                const j = JSON.parse(raw) as { priceNative?: number };
+                if (typeof j.priceNative === 'number' && j.priceNative > 0) return j.priceNative;
+            }
+        } catch {
+            /* ignore parse errors */
+        }
+
+        if (!this.openSeaFloor.isConfigured()) return null;
+        try {
+            const floor = await Promise.race([
+                this.openSeaFloor.fetchFloor({ contract: c, chain: ch }),
+                new Promise<null>(r => setTimeout(() => r(null), 16_000)),
+            ]);
+            return floor && typeof floor.priceNative === 'number' && floor.priceNative > 0
+                ? floor.priceNative
+                : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private async handleFloorImpactJob(data: {
+        originalEventId: string;
+        channelId: string;
+        alertType: 'MASS_LISTING' | 'MASS_DELIST';
+        contract: string;
+        chain: string;
+        floorBefore: number | null;
+    }) {
+        const originalEventId = String(data.originalEventId || '');
+        const channelId = String(data.channelId || '');
+        const contract = (data.contract || '').toLowerCase();
+        const chain = (data.chain || 'ethereum').toLowerCase();
+        if (!originalEventId || !channelId || !contract) return;
+
+        const floorBeforeRaw = data.floorBefore;
+        const floorBefore =
+            typeof floorBeforeRaw === 'number' && floorBeforeRaw > 0 ? floorBeforeRaw : null;
+
+        let replyToMessageId: string | undefined;
+        try {
+            const v = await redisConnection.get(`alert_discord_msg:${originalEventId}`);
+            replyToMessageId = v || undefined;
+        } catch (err) {
+            console.warn('[Worker] Redis alert_discord_msg get failed:', err);
+        }
+
+        if (!replyToMessageId) {
+            console.warn(
+                `[Worker] Floor impact skipped (no Discord message id for ${originalEventId}).`,
+            );
+            return;
+        }
+
+        const floorAfter = await this.readFloorNativeCachedOrOpenSea(chain, contract);
+
+        let pctChange: number | null = null;
+        if (
+            floorBefore !== null &&
+            floorBefore > 0 &&
+            floorAfter !== null &&
+            floorAfter > 0
+        ) {
+            pctChange = ((floorAfter - floorBefore) / floorBefore) * 100;
+        }
+
+        const deliveryKey = `FLOOR_IMPACT_FOLLOWUP:${originalEventId}:${channelId}`;
+
+        await discordDeliveryQueue.add(
+            'floor_impact_followup',
+            {
+                deliveryKey,
+                eventId: originalEventId,
+                channelId,
+                contract,
+                replyToMessageId,
+                alertType: data.alertType,
+                floorBefore,
+                floorAfter: floorAfter !== null ? floorAfter : null,
+                pctChange,
+            },
+            {
+                jobId: `floor-followup-discord:${originalEventId}:${channelId}`,
+                removeOnComplete: { age: 3600 },
+                removeOnFail: { age: 86400 },
+            },
+        );
     }
 
     /** Best-effort pairwise link for wash-trade hints (30d TTL); never throws. */
@@ -157,6 +276,33 @@ export class EventWorker {
                 contractAddress: { equals: contract, mode: 'insensitive' },
             },
         });
+
+        const fromLc = typeof from === 'string' ? from.toLowerCase() : '';
+        const chainLc = (chain || 'ethereum').toLowerCase();
+        if (
+            fromLc === ZERO_ADDR &&
+            chainLc === 'ethereum' &&
+            trackedCollections.length > 0 &&
+            typeof to === 'string' &&
+            to.trim().length > 0
+        ) {
+            const tsMs =
+                jobTs !== undefined && jobTs > 0
+                    ? jobTs > 1e12
+                      ? jobTs
+                      : jobTs * 1000
+                    : Date.now();
+            const hotDet = this.hotMintDetector.ingest({
+                chain: chainLc,
+                contract: contract.toLowerCase(),
+                minter: to.toLowerCase(),
+                blockNumber: jobBlock !== undefined && jobBlock > 0 ? jobBlock : undefined,
+                tsMs,
+            });
+            if (hotDet) {
+                await this.dispatchHotMint(hotDet, trackedCollections);
+            }
+        }
 
         const trackedBuyers = await prisma.trackedWallet.findMany({
             where: { address: { equals: to, mode: 'insensitive' } },
@@ -498,6 +644,132 @@ export class EventWorker {
                 },
                 {
                     jobId: `sweep-${row.id}-${sweep.eventId}`,
+                    removeOnComplete: { age: 3600 },
+                    removeOnFail: { age: 86400 },
+                },
+            );
+        }
+    }
+
+    private async dispatchHotMint(
+        det: HotMintDetection,
+        collections: {
+            id: string;
+            guildId: string;
+            alertChannelId: string | null;
+            hotMintEnabled: boolean;
+            hotMintChannelId: string | null;
+            mentionRoleId: string | null;
+            name: string;
+        }[],
+    ) {
+        const cdMs = Number(process.env.HOT_MINT_COOLDOWN_MS) || 30 * 60 * 1000;
+        try {
+            const stamped = await redisConnection.set(
+                `hotmint_cool:${det.chain}:${det.contract}`,
+                '1',
+                'PX',
+                cdMs,
+                'NX',
+            );
+            if (stamped !== 'OK') return;
+        } catch (err) {
+            console.warn('[Worker] Hot mint cooldown redis failed:', err);
+            return;
+        }
+
+        const guildIds = [...new Set(collections.map(c => c.guildId))];
+        const guilds = await prisma.guild.findMany({
+            where: { id: { in: guildIds } },
+            include: { alertChannels: true },
+        });
+        const guildById = new Map(guilds.map(g => [g.id, g]));
+
+        const [collectionMeta] = await Promise.all([
+            this.nftMetadata.fetchCollection(det.contract).catch(() => null),
+        ]);
+
+        const topProfiles = await Promise.all(
+            det.topMinters.map(async m => ({
+                addr: m.address.toLowerCase(),
+                count: m.count,
+                profile: await this.safeFetchWallet(m.address),
+            })),
+        );
+
+        let floorEth: number | null = null;
+        try {
+            const raw = await redisConnection.get(`floor:ethereum:${det.contract.toLowerCase()}`);
+            if (raw) {
+                const j = JSON.parse(raw) as { priceNative?: number };
+                if (typeof j.priceNative === 'number' && j.priceNative > 0) {
+                    floorEth = j.priceNative;
+                }
+            }
+        } catch {
+            /* ignore */
+        }
+
+        if (floorEth === null) {
+            floorEth = await this.readFloorNativeCachedOrOpenSea('ethereum', det.contract);
+        }
+
+        const supplyNum = collectionMeta?.totalSupply;
+        const pctMinted =
+            typeof supplyNum === 'number' &&
+            supplyNum > 0 &&
+            det.totalMints > 0
+                ? Math.min(100, (det.totalMints / supplyNum) * 100)
+                : null;
+
+        const windowMin = Math.max(1, Math.round(det.windowMs / 60000));
+        const velocityPerMin =
+            det.windowMs >= 60_000 ? det.totalMints / (det.windowMs / 60_000) : det.totalMints;
+
+        const blockRange =
+            det.blockMin > 0 && det.blockMax > 0 ? `${det.blockMin} → ${det.blockMax}` : '—';
+
+        const topMinerLines = topProfiles.map(tp => {
+            const label =
+                tp.profile?.ens && tp.profile.ens.trim()
+                    ? tp.profile.ens
+                    : shortEthAddr(tp.addr);
+            return `• ${label} — ${tp.count} mint${tp.count === 1 ? '' : 's'}`;
+        });
+
+        for (const row of collections) {
+            if (!row.hotMintEnabled) continue;
+            const guild = guildById.get(row.guildId);
+            const defaultWhaleChannel =
+                guild?.alertChannels.find(c => c.alertType === 'WHALE_BUY')?.discordChannelId ?? null;
+            const channelId = row.hotMintChannelId ?? row.alertChannelId ?? defaultWhaleChannel;
+            if (!channelId) {
+                console.warn(`[Worker] HOT_MINT: no channel row=${row.id} contract=${det.contract}`);
+                continue;
+            }
+
+            await discordDeliveryQueue.add(
+                'discord_alert',
+                {
+                    eventId: det.eventId,
+                    channelId,
+                    alertType: 'HOT_MINT',
+                    contract: det.contract,
+                    chain: det.chain,
+                    collectionName: collectionMeta?.name ?? row.name,
+                    collectionMeta,
+                    uniqueMinters: det.uniqueMinters,
+                    totalMints: det.totalMints,
+                    windowMinutes: windowMin,
+                    velocityPerMin,
+                    pctSupplyMinted: pctMinted,
+                    floorEth,
+                    blockRange,
+                    topMinerLines,
+                    mentionRoleId: row.mentionRoleId,
+                },
+                {
+                    jobId: `hot-mint-${row.id}-${det.eventId}`,
                     removeOnComplete: { age: 3600 },
                     removeOnFail: { age: 86400 },
                 },

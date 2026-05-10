@@ -20,6 +20,9 @@ export const links = {
     etherscan: {
         tx: (hash: string) => `https://etherscan.io/tx/${hash}`,
         wallet: (address: string) => `https://etherscan.io/address/${normContract(address)}`,
+        /** Contract “Write Contract” tab (mint / interaction entry point). */
+        writeContract: (contract: string) =>
+            `https://etherscan.io/address/${normContract(contract)}#writeContract`,
         token: (contract: string) => `https://etherscan.io/token/${normContract(contract)}`,
         nft: (contract: string, tokenId: string) =>
             `https://etherscan.io/nft/${normContract(contract)}/${encodeURIComponent(tokenId)}`,

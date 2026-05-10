@@ -48,6 +48,8 @@ export interface NormalizedListing {
     currency: string;
     marketplace?: string;
     raw: unknown;
+    /** Seaport / OpenSea order hash when exposed by the marketplace API */
+    orderHash?: string;
 }
 
 export interface FetchListingsArgs {
@@ -80,6 +82,8 @@ export interface SalesProvider {
     fetchSales(args: FetchSalesArgs): Promise<FetchSalesResult>;
     /** OpenSea-backed deployments populate this; others return an empty page. */
     fetchListings(args: FetchListingsArgs): Promise<FetchListingsResult>;
+    /** Listing cancellations / delists from OpenSea; others return empty. */
+    fetchCancellations(args: FetchListingsArgs): Promise<FetchListingsResult>;
     /** Best effort floor for the contract; returns null when unavailable. */
     fetchFloor(args: FetchFloorArgs): Promise<FetchFloorResult | null>;
 }

@@ -8,6 +8,8 @@ export * from './OpenSeaSales';
 export * from './SweepDetector';
 export * from './SmartMoneyClusterDetector';
 export * from './MassListingDetector';
+export * from './MassDelistDetector';
+export * from './HotMintDetector';
 export * from './NFTMetadata';
 export * from './WalletProfile';
 export * from './rpcUrls';

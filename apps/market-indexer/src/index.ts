@@ -1,8 +1,9 @@
 import * as dotenv from 'dotenv';
-import { discordQueue, redisConnection } from '@superbot/queue';
+import { discordQueue, floorImpactQueue, redisConnection } from '@superbot/queue';
 import { prisma } from '@superbot/database';
 import {
     MassListingDetector,
+    MassDelistDetector,
     NFTMetadataClient,
     OpenSeaSalesClient,
     SalesProvider,
@@ -10,22 +11,27 @@ import {
 
 dotenv.config();
 
+const FLOOR_IMPACT_DELAY_MS = Number(process.env.FLOOR_IMPACT_DELAY_MS) || 10 * 60 * 1000;
+
 /**
- * Polls OpenSea for floor snapshots + listing events per tracked contract (deduped),
- * writes floor readings to Redis for the floor-checker worker, and emits mass-listing alerts.
+ * Polls OpenSea for floor snapshots + listing / cancel events per tracked contract (deduped),
+ * writes floor readings to Redis for the floor-checker worker, and emits mass-listing / mass-delist alerts.
  *
  * Requires OPENSEA_API_KEY; without it the service stays idle (no mock data).
  */
 export class MarketIndexer {
     private provider: SalesProvider | null = null;
-    private detector = new MassListingDetector();
+    private listingDetector = new MassListingDetector();
+    private delistDetector = new MassDelistDetector();
     /** Same collection enrichment pattern as EventWorker sweep/cluster alerts */
     private nftMetadata = new NFTMetadataClient({ redis: redisConnection });
     private pollIntervalMs = Number(process.env.MARKET_POLL_INTERVAL_MS) || 60_000;
     private timer: NodeJS.Timeout | null = null;
     private listingCursorByContract = new Map<string, string>();
+    private cancelCursorByContract = new Map<string, string>();
     /** Per-contract minimum listing surge required (max of guild prefs). */
     private massListingMinByContract = new Map<string, number>();
+    private massDelistMinDefault = Number(process.env.MASS_DELIST_MIN_COUNT) || 8;
 
     constructor() {
         const opensea = new OpenSeaSalesClient();
@@ -52,6 +58,63 @@ export class MarketIndexer {
 
     public async stop() {
         if (this.timer) clearInterval(this.timer);
+    }
+
+    private async readFloorNative(chain: string, contract: string): Promise<number | null> {
+        const ch = (chain || 'ethereum').toLowerCase();
+        try {
+            const raw = await redisConnection.get(`floor:${ch}:${contract.toLowerCase()}`);
+            if (raw) {
+                const j = JSON.parse(raw) as { priceNative?: number };
+                if (typeof j.priceNative === 'number' && j.priceNative > 0) return j.priceNative;
+            }
+        } catch {
+            /* ignore malformed cache */
+        }
+
+        if (!this.provider) return null;
+        try {
+            const f = await Promise.race([
+                this.provider.fetchFloor({ contract, chain: ch }),
+                new Promise<null>(r => setTimeout(() => r(null), 16_000)),
+            ]);
+            return f && typeof f.priceNative === 'number' && f.priceNative > 0 ? f.priceNative : null;
+        } catch {
+            return null;
+        }
+    }
+
+    private async scheduleFloorImpact(args: {
+        eventId: string;
+        channelId: string;
+        alertType: 'MASS_LISTING' | 'MASS_DELIST';
+        contract: string;
+        chain: string;
+        floorBefore: number | null;
+    }) {
+        try {
+            await floorImpactQueue.add(
+                'floor_impact_check',
+                {
+                    originalEventId: args.eventId,
+                    channelId: args.channelId,
+                    alertType: args.alertType,
+                    contract: args.contract,
+                    chain: args.chain,
+                    floorBefore: args.floorBefore,
+                    scheduledAt: Date.now(),
+                    dueAt: Date.now() + FLOOR_IMPACT_DELAY_MS,
+                },
+                {
+                    delay: FLOOR_IMPACT_DELAY_MS,
+                    jobId: `floor_impact:${args.eventId}`,
+                    removeOnComplete: { age: 3600 },
+                    removeOnFail: { age: 86400 },
+                },
+            );
+        } catch (err) {
+            console.warn('[MarketIndexer] floor_impact enqueue failed:', err);
+        }
     }
 
     private async tick() {
@@ -84,8 +147,7 @@ export class MarketIndexer {
                 .map(r => r.massListingThreshold)
                 .filter((x): x is number => x != null && x > 0);
             /** Fire the detector as soon as the most sensitive tracked guild would care. */
-            const minL =
-                customs.length > 0 ? Math.min(...customs) : defaultMassMin;
+            const minL = customs.length > 0 ? Math.min(...customs) : defaultMassMin;
             this.massListingMinByContract.set(contract.toLowerCase(), Math.max(1, minL));
         }
 
@@ -106,28 +168,59 @@ export class MarketIndexer {
                     await redisConnection.set(`floor:${chain}:${contract}`, payload);
                 }
 
-                const cursor = this.listingCursorByContract.get(key);
-                const result = await this.provider.fetchListings({
+                const floorBefore = await this.readFloorNative(chain, contract);
+
+                const listingCursor = this.listingCursorByContract.get(key);
+                const listingResult = await this.provider.fetchListings({
                     contract,
                     chain,
-                    cursor,
+                    cursor: listingCursor,
                     limit: 50,
                 });
 
-                for (const listing of result.listings) {
-                    const det = this.detector.ingest(listing, { minListings: minForContract });
+                for (const listing of listingResult.listings) {
+                    const det = this.listingDetector.ingest(listing, {
+                        minListings: minForContract,
+                    });
                     if (det) {
-                        await this.dispatchMassListing(det);
+                        await this.dispatchMassListing(det, floorBefore);
                     }
                 }
 
-                if (result.nextCursor) {
-                    this.listingCursorByContract.set(key, result.nextCursor);
+                if (listingResult.nextCursor) {
+                    this.listingCursorByContract.set(key, listingResult.nextCursor);
                 }
 
-                if (result.listings.length > 0) {
+                if (listingResult.listings.length > 0) {
                     console.log(
-                        `[MarketIndexer] ${result.listings.length} listing events for ${contract} (cursor=${result.nextCursor ?? 'unchanged'})`,
+                        `[MarketIndexer] ${listingResult.listings.length} listing events for ${contract} (cursor=${listingResult.nextCursor ?? 'unchanged'})`,
+                    );
+                }
+
+                const cancelCursor = this.cancelCursorByContract.get(key);
+                const cancelResult = await this.provider.fetchCancellations({
+                    contract,
+                    chain,
+                    cursor: cancelCursor,
+                    limit: 50,
+                });
+
+                for (const c of cancelResult.listings) {
+                    const del = this.delistDetector.ingest(c, {
+                        minCancels: this.massDelistMinDefault,
+                    });
+                    if (del) {
+                        await this.dispatchMassDelist(del, floorBefore);
+                    }
+                }
+
+                if (cancelResult.nextCursor) {
+                    this.cancelCursorByContract.set(key, cancelResult.nextCursor);
+                }
+
+                if (cancelResult.listings.length > 0) {
+                    console.log(
+                        `[MarketIndexer] ${cancelResult.listings.length} cancel/delist events for ${contract} (cursor=${cancelResult.nextCursor ?? 'unchanged'})`,
                     );
                 }
             } catch (err) {
@@ -136,13 +229,16 @@ export class MarketIndexer {
         }
     }
 
-    private async dispatchMassListing(det: {
-        bucketStart: number;
-        chain: string;
-        contract: string;
-        count: number;
-        windowMs: number;
-    }) {
+    private async dispatchMassListing(
+        det: {
+            bucketStart: number;
+            chain: string;
+            contract: string;
+            count: number;
+            windowMs: number;
+        },
+        floorBefore: number | null,
+    ) {
         const defaultMin = Number(process.env.MASS_LISTING_MIN_COUNT) || 8;
 
         const rows = await prisma.trackedCollection.findMany({
@@ -177,6 +273,8 @@ export class MarketIndexer {
                     listingCount: det.count,
                     windowMs: det.windowMs,
                     mentionRoleId: row.mentionRoleId,
+                    floorBeforeEth: floorBefore,
+                    floorImpactPending: true,
                 },
                 {
                     jobId: `mass-listing-${row.id}-${det.bucketStart}-${minListings}`,
@@ -184,6 +282,82 @@ export class MarketIndexer {
                     removeOnFail: { age: 86400 },
                 },
             );
+
+            await this.scheduleFloorImpact({
+                eventId,
+                channelId: row.alertChannelId,
+                alertType: 'MASS_LISTING',
+                contract: det.contract,
+                chain: det.chain,
+                floorBefore,
+            });
+        }
+    }
+
+    private async dispatchMassDelist(
+        det: {
+            bucketStart: number;
+            chain: string;
+            contract: string;
+            count: number;
+            windowMs: number;
+            sampleOrderIds: string[];
+        },
+        floorBefore: number | null,
+    ) {
+        const rows = await prisma.trackedCollection.findMany({
+            where: {
+                chain: 'ethereum',
+                contractAddress: { equals: det.contract, mode: 'insensitive' },
+            },
+        });
+
+        const collectionMeta =
+            rows.length === 0
+                ? null
+                : await this.nftMetadata.fetchCollection(det.contract).catch(() => null);
+
+        for (const row of rows) {
+            if (row.delistAlertEnabled === false) continue;
+            if (det.count < this.massDelistMinDefault) continue;
+
+            const channelId = row.delistChannelId ?? row.alertChannelId;
+            if (!channelId) continue;
+
+            const eventId = `delist:${det.contract}:${det.bucketStart}:${row.id}`;
+
+            await discordQueue.add(
+                'discord_alert',
+                {
+                    eventId,
+                    channelId,
+                    alertType: 'MASS_DELIST',
+                    contract: det.contract,
+                    chain: det.chain,
+                    collectionName: collectionMeta?.name ?? row.name,
+                    collectionMeta,
+                    delistCount: det.count,
+                    windowMs: det.windowMs,
+                    sampleOrderIds: det.sampleOrderIds,
+                    mentionRoleId: row.mentionRoleId,
+                    floorBeforeEth: floorBefore,
+                    floorImpactPending: true,
+                },
+                {
+                    jobId: `mass-delist-${row.id}-${det.bucketStart}-${this.massDelistMinDefault}`,
+                    removeOnComplete: { age: 3600 },
+                    removeOnFail: { age: 86400 },
+                },
+            );
+
+            await this.scheduleFloorImpact({
+                eventId,
+                channelId,
+                alertType: 'MASS_DELIST',
+                contract: det.contract,
+                chain: det.chain,
+                floorBefore,
+            });
         }
     }
 }

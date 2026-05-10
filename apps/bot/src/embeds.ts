@@ -426,22 +426,205 @@ export function createMassListingEmbed(data: {
     listingCount: number;
     windowMs: number;
     collectionMeta?: CollectionMetadata | null;
+    /** Floor snapshot when the surge fired (omit if unavailable). */
+    floorBeforeEth?: number | null;
+    floorImpactPending?: boolean;
 }) {
     const mins = Math.round(data.windowMs / 60000) || 1;
     const slug = data.collectionMeta?.slug?.trim() || null;
-    return new EmbedBuilder()
+
+    const floor =
+        typeof data.floorBeforeEth === 'number' && data.floorBeforeEth > 0
+            ? `${data.floorBeforeEth.toFixed(4)} ETH`
+            : null;
+
+    const embed = new EmbedBuilder()
         .setColor('#38bdf8')
         .setTitle('📣 Listing surge')
-        .setDescription(`Many new listings appeared in a short window.`)
+        .setDescription(`Many new listings appeared in a short window.`);
+
+    const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
+    if (thumb) embed.setThumbnail(thumb);
+
+    embed.addFields(
+        { name: 'Collection', value: data.collectionName, inline: true },
+        { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: true },
+        { name: 'Chain', value: data.chain, inline: true },
+        { name: 'New listings (window)', value: `${data.listingCount} / ~${mins} min`, inline: false },
+    );
+
+    if (floor) {
+        embed.addFields({ name: 'Floor at trigger', value: floor, inline: true });
+    }
+
+    embed.addFields({ name: 'Links', value: markdownCollectionToolkit(data.contract, slug), inline: false });
+
+    const base = 'SuperBot Market Intelligence • Not financial advice';
+    const footerText = data.floorImpactPending
+        ? `${base} • Checking floor impact in ~10 minutes.`
+        : base;
+    return embed.setTimestamp().setFooter({ text: footerText });
+}
+
+export function createMassDelistEmbed(data: {
+    collectionName: string;
+    contract: string;
+    chain: string;
+    delistCount: number;
+    windowMs: number;
+    sampleOrderIds?: string[];
+    collectionMeta?: CollectionMetadata | null;
+    floorBeforeEth?: number | null;
+    floorImpactPending?: boolean;
+}) {
+    const mins = Math.round(data.windowMs / 60000) || 1;
+    const slug = data.collectionMeta?.slug?.trim() || null;
+
+    const sample =
+        data.sampleOrderIds && data.sampleOrderIds.length > 0
+            ? data.sampleOrderIds.slice(0, 5).join(', ')
+            : '—';
+
+    const floor =
+        typeof data.floorBeforeEth === 'number' && data.floorBeforeEth > 0
+            ? `${data.floorBeforeEth.toFixed(4)} ETH`
+            : null;
+
+    const embed = new EmbedBuilder()
+        .setColor('#34d399')
+        .setTitle('✨ Delist surge')
+        .setDescription(
+            `**Delist surge:** ${data.delistCount} NFTs pulled from marketplace listings in ~${mins} min — tighter supply.`,
+        );
+
+    const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
+    if (thumb) embed.setThumbnail(thumb);
+
+    embed.addFields(
+        { name: 'Collection', value: data.collectionName, inline: true },
+        { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: true },
+        { name: 'Chain', value: data.chain, inline: true },
+        { name: 'Delists (window)', value: `${data.delistCount} / ~${mins} min`, inline: false },
+        { name: 'Sample identifiers', value: sample.slice(0, 350) || '—', inline: false },
+    );
+
+    if (floor) {
+        embed.addFields({ name: 'Floor at trigger', value: floor, inline: true });
+    }
+
+    embed.addFields({ name: 'Links', value: markdownCollectionToolkit(data.contract, slug), inline: false });
+
+    const base = 'SuperBot Market Intelligence • Not financial advice';
+    const footerText = data.floorImpactPending
+        ? `${base} • Checking floor impact in ~10 minutes.`
+        : base;
+    return embed.setTimestamp().setFooter({ text: footerText });
+}
+
+/** Threaded reply after delayed floor observation (numbers only — no directional labels). */
+export function createFloorImpactFollowupEmbed(data: {
+    alertType: 'MASS_LISTING' | 'MASS_DELIST';
+    contract: string;
+    floorBefore: number | null;
+    floorAfter: number | null;
+    pctChange: number | null;
+}) {
+    const colorHex = embedColorFloorImpactFollowup(data.alertType, data.pctChange);
+
+    const before =
+        typeof data.floorBefore === 'number' && data.floorBefore > 0
+            ? `${data.floorBefore.toFixed(4)} ETH`
+            : '—';
+    const after =
+        typeof data.floorAfter === 'number' && data.floorAfter > 0
+            ? `${data.floorAfter.toFixed(4)} ETH`
+            : '—';
+    const ch =
+        data.pctChange !== null && !Number.isNaN(data.pctChange)
+            ? `${data.pctChange >= 0 ? '+' : ''}${data.pctChange.toFixed(2)}%`
+            : '—';
+
+    return new EmbedBuilder()
+        .setColor(colorHex)
+        .setTitle('Floor observation (10 min later)')
+        .setDescription(data.contract ? `Contract \`${shortAddr(data.contract)}\`` : '')
         .addFields(
-            { name: 'Collection', value: data.collectionName, inline: true },
-            { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: true },
-            { name: 'Chain', value: data.chain, inline: true },
-            { name: 'New listings (window)', value: `${data.listingCount} / ~${mins} min`, inline: false },
-            { name: 'Links', value: markdownCollectionToolkit(data.contract, slug), inline: false },
+            { name: 'Floor before', value: before, inline: true },
+            { name: 'Floor now', value: after, inline: true },
+            { name: 'Change', value: ch, inline: true },
         )
         .setTimestamp()
-        .setFooter({ text: 'SuperBot Market Intelligence • Not financial advice' });
+        .setFooter({ text: 'SuperBot Market Intelligence • Informational snapshot only' });
+}
+
+function embedColorFloorImpactFollowup(
+    alertType: 'MASS_LISTING' | 'MASS_DELIST',
+    pct: number | null,
+): number {
+    if (pct === null || Number.isNaN(pct)) return 0x64748b;
+    if (alertType === 'MASS_DELIST') {
+        return pct >= 0 ? 0x22c55e : 0xef4444;
+    }
+    return pct <= 0 ? 0xef4444 : 0x22c55e;
+}
+
+export function createHotMintEmbed(data: {
+    collectionName: string;
+    contract: string;
+    chain: string;
+    uniqueMinters: number;
+    totalMints: number;
+    windowMinutes: number;
+    velocityPerMin: number;
+    pctSupplyMinted?: number | null;
+    floorEth?: number | null;
+    blockRange: string;
+    topMinerLines: string[];
+    collectionMeta?: CollectionMetadata | null;
+}) {
+    const slug = data.collectionMeta?.slug?.trim() || null;
+    const pct =
+        data.pctSupplyMinted != null && !Number.isNaN(data.pctSupplyMinted)
+            ? `${data.pctSupplyMinted.toFixed(2)}%`
+            : '—';
+
+    const floorShow =
+        typeof data.floorEth === 'number' && data.floorEth > 0 ? `${data.floorEth.toFixed(4)} ETH` : '—';
+
+    const embed = new EmbedBuilder()
+        .setColor('#f97316')
+        .setTitle(`🔥 Hot Mint — ${data.collectionName}`)
+        .setDescription(
+            `**${data.uniqueMinters}** wallets minted **${data.totalMints}** tokens in **~${data.windowMinutes}** minutes.`,
+        );
+
+    const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
+    if (thumb) embed.setThumbnail(thumb);
+
+    embed.addFields(
+        { name: 'Velocity', value: `${data.velocityPerMin.toFixed(2)} mints/min`, inline: true },
+        { name: '% of supply minted', value: pct, inline: true },
+        { name: 'Current floor', value: floorShow, inline: true },
+        {
+            name: 'Top minters',
+            value: data.topMinerLines.length ? data.topMinerLines.join('\n') : '—',
+            inline: false,
+        },
+        { name: 'Block range', value: data.blockRange, inline: false },
+        { name: '🧠 AI signal', value: 'None', inline: false },
+        {
+            name: 'Links',
+            value: [
+                markdownCollectionToolkit(data.contract, slug),
+                `[Mint (write)](${links.etherscan.writeContract(data.contract)})`,
+            ].join(' · '),
+            inline: false,
+        },
+    );
+
+    return embed
+        .setTimestamp()
+        .setFooter({ text: 'SuperBot Mint Intelligence • Not financial advice • Ethereum only' });
 }
 
 export function createFloorMovementEmbed(data: {

@@ -45,6 +45,18 @@ export const data = new SlashCommandBuilder()
         opt.setName('mention-role')
             .setDescription('Role to ping for alerts from this collection')
             .setRequired(false)
+    )
+    .addBooleanOption(opt =>
+        opt
+            .setName('hot-mint-enabled')
+            .setDescription('Enable hot-mint velocity alerts for this collection')
+            .setRequired(false)
+    )
+    .addBooleanOption(opt =>
+        opt
+            .setName('delist-enabled')
+            .setDescription('Enable mass-delist surge alerts for this collection')
+            .setRequired(false)
     );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
@@ -58,6 +70,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const massListingThreshold = interaction.options.getInteger('mass-listing-threshold') ?? null;
     const channelId   = interaction.options.getString('channel-id') ?? null;
     const role        = interaction.options.getRole('mention-role');
+    const hotMintEnabled = interaction.options.getBoolean('hot-mint-enabled');
+    const delistEnabled = interaction.options.getBoolean('delist-enabled');
     const guildId     = interaction.guildId!;
 
     if (!ethers.isAddress(contract)) {
@@ -91,6 +105,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 floorRiseAlertPct: floorRisePct,
                 sweepThresholdNative: sweepThreshold,
                 massListingThreshold: massListingThreshold ?? undefined,
+                hotMintEnabled: hotMintEnabled ?? true,
+                delistAlertEnabled: delistEnabled ?? true,
                 alertChannelId: targetChannelId,
                 mentionRoleId: role?.id,
             },
@@ -100,6 +116,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 floorRiseAlertPct: floorRisePct,
                 sweepThresholdNative: sweepThreshold,
                 massListingThreshold: massListingThreshold ?? undefined,
+                ...(hotMintEnabled !== null ? { hotMintEnabled } : {}),
+                ...(delistEnabled !== null ? { delistAlertEnabled: delistEnabled } : {}),
                 alertChannelId: targetChannelId,
                 mentionRoleId: role?.id,
             },
@@ -115,6 +133,8 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 { name: 'Floor rise %', value: floorRisePct != null ? `${floorRisePct}%` : '—', inline: true },
                 { name: 'Sweep min ΣETH', value: sweepThreshold != null ? String(sweepThreshold) : 'default', inline: true },
                 { name: 'Mass listings', value: massListingThreshold != null ? String(massListingThreshold) : 'default', inline: true },
+                { name: 'Hot mint', value: collection.hotMintEnabled ? 'on' : 'off', inline: true },
+                { name: 'Delist alerts', value: collection.delistAlertEnabled ? 'on' : 'off', inline: true },
                 { name: 'Alerts →',   value: `<#${targetChannelId}>`, inline: true },
                 { name: 'Ping Role', value: role ? `<@&${role.id}>` : '—', inline: true }
             )

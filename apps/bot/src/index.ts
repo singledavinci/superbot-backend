@@ -12,8 +12,11 @@ import {
     createFloorUpdateEmbed,
     createSweepEmbed,
     createMassListingEmbed,
+    createMassDelistEmbed,
     createFloorMovementEmbed,
     createClusterBuyEmbed,
+    createFloorImpactFollowupEmbed,
+    createHotMintEmbed,
 } from './embeds';
 import { links } from './links';
 
@@ -204,6 +207,8 @@ export class SuperBot {
         this.deliveryWorker = new Worker('discord_delivery', async (job: Job) => {
             if (job.name === 'discord_alert') {
                 await this.dispatchAlert(job.data);
+            } else if (job.name === 'floor_impact_followup') {
+                await this.dispatchFloorImpactFollowup(job.data);
             }
         }, {
             connection: redisConnection,
@@ -345,9 +350,82 @@ export class SuperBot {
                     listingCount: data.listingCount,
                     windowMs: data.windowMs,
                     collectionMeta: data.collectionMeta ?? null,
+                    floorBeforeEth:
+                        typeof data.floorBeforeEth === 'number' && data.floorBeforeEth > 0
+                            ? data.floorBeforeEth
+                            : null,
+                    floorImpactPending: Boolean(data.floorImpactPending),
                 });
                 const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
                     ...collectionMarketplaceButtons(data.contract, massSlug),
+                );
+                const sent = await channel.send({
+                    content,
+                    embeds: [embed],
+                    components: [row],
+                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                });
+                if (eventId && sent?.id) {
+                    try {
+                        await redisConnection.set(`alert_discord_msg:${eventId}`, sent.id, 'EX', 3600);
+                    } catch (e) {
+                        console.warn('[Delivery] Redis alert_discord_msg set failed:', e);
+                    }
+                }
+            } else if (alertType === 'MASS_DELIST') {
+                const slug = data.collectionMeta?.slug ?? null;
+                const embed = createMassDelistEmbed({
+                    collectionName: data.collectionName,
+                    contract: data.contract,
+                    chain: data.chain,
+                    delistCount: Number(data.delistCount) || 0,
+                    windowMs: Number(data.windowMs) || 0,
+                    sampleOrderIds: Array.isArray(data.sampleOrderIds) ? data.sampleOrderIds : [],
+                    collectionMeta: data.collectionMeta ?? null,
+                    floorBeforeEth:
+                        typeof data.floorBeforeEth === 'number' && data.floorBeforeEth > 0
+                            ? data.floorBeforeEth
+                            : null,
+                    floorImpactPending: Boolean(data.floorImpactPending),
+                });
+                const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    ...collectionMarketplaceButtons(data.contract, slug),
+                );
+                const sent = await channel.send({
+                    content,
+                    embeds: [embed],
+                    components: [row],
+                    allowedMentions: { roles: data.mentionRoleId ? [data.mentionRoleId] : [] },
+                });
+                if (eventId && sent?.id) {
+                    try {
+                        await redisConnection.set(`alert_discord_msg:${eventId}`, sent.id, 'EX', 3600);
+                    } catch (e) {
+                        console.warn('[Delivery] Redis alert_discord_msg set failed:', e);
+                    }
+                }
+            } else if (alertType === 'HOT_MINT') {
+                const slug = data.collectionMeta?.slug ?? null;
+                const embed = createHotMintEmbed({
+                    collectionName: data.collectionName ?? data.contract,
+                    contract: data.contract,
+                    chain: data.chain || 'ethereum',
+                    uniqueMinters: Number(data.uniqueMinters) || 0,
+                    totalMints: Number(data.totalMints) || 0,
+                    windowMinutes: Number(data.windowMinutes) || 10,
+                    velocityPerMin: Number(data.velocityPerMin) || 0,
+                    pctSupplyMinted:
+                        data.pctSupplyMinted !== undefined && data.pctSupplyMinted !== null
+                            ? Number(data.pctSupplyMinted)
+                            : null,
+                    floorEth:
+                        typeof data.floorEth === 'number' && data.floorEth > 0 ? data.floorEth : null,
+                    blockRange: String(data.blockRange || '—'),
+                    topMinerLines: Array.isArray(data.topMinerLines) ? data.topMinerLines : [],
+                    collectionMeta: data.collectionMeta ?? null,
+                });
+                const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    ...collectionMarketplaceButtons(data.contract, slug),
                 );
                 await channel.send({
                     content,
@@ -416,6 +494,75 @@ export class SuperBot {
             if (deliveryKey && eventId && channelId) {
                 await this.recordDelivery(deliveryKey, eventId, channelId, alertType, 'failed', message.slice(0, 500));
             }
+        }
+    }
+
+    private async dispatchFloorImpactFollowup(data: {
+        deliveryKey: string;
+        eventId: string;
+        channelId: string;
+        contract: string;
+        replyToMessageId: string;
+        alertType: 'MASS_LISTING' | 'MASS_DELIST';
+        floorBefore: number | null;
+        floorAfter: number | null;
+        pctChange: number | null;
+    }) {
+        const deliveryKey = data.deliveryKey;
+        const eventId = data.eventId;
+        const channelId = data.channelId;
+        const alertType = 'FLOOR_IMPACT_FOLLOWUP';
+
+        try {
+            const existing = await prisma.alertDeliveryLog.findUnique({ where: { deliveryKey } });
+            if (existing && existing.status === 'delivered') {
+                console.log(`[Delivery] Skipping duplicate floor follow-up (${deliveryKey}).`);
+                return;
+            }
+        } catch (err) {
+            console.warn('[Delivery] AlertDeliveryLog lookup failed (floor follow-up); proceeding.', err);
+        }
+
+        try {
+            const channel = await this.client.channels.fetch(data.channelId) as TextChannel;
+            if (!channel || !channel.isTextBased()) {
+                await this.recordDelivery(
+                    deliveryKey,
+                    eventId,
+                    channelId,
+                    alertType,
+                    'failed',
+                    'channel_not_text',
+                );
+                return;
+            }
+
+            const embed = createFloorImpactFollowupEmbed({
+                alertType: data.alertType,
+                contract: data.contract,
+                floorBefore: data.floorBefore,
+                floorAfter: data.floorAfter,
+                pctChange: data.pctChange,
+            });
+
+            const orig = await channel.messages.fetch(data.replyToMessageId);
+            await orig.reply({
+                embeds: [embed],
+                allowedMentions: { parse: [] },
+            });
+
+            await this.recordDelivery(deliveryKey, eventId, channelId, alertType, 'delivered');
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(`[Delivery] Floor follow-up failed channel=${data.channelId}:`, message);
+            await this.recordDelivery(
+                deliveryKey,
+                eventId,
+                channelId,
+                alertType,
+                'failed',
+                message.slice(0, 500),
+            );
         }
     }
 

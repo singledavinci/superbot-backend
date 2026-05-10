@@ -319,6 +319,89 @@ export class OpenSeaSalesClient implements SalesProvider {
             priceNative,
             currency: event.payment?.symbol ?? 'ETH',
             marketplace: 'OpenSea',
+            orderHash: event.order_hash,
+            raw: event,
+        };
+    }
+
+    /** OpenSea collection events where listings / offers were canceled (delisted). */
+    public async fetchCancellations(args: FetchListingsArgs): Promise<FetchListingsResult> {
+        if (!this.isConfigured()) return { listings: [] };
+
+        const chain = this.resolveChain(args.chain);
+        if (!chain) return { listings: [] };
+
+        const slug = await this.getSlug(chain, args.contract.toLowerCase());
+        if (!slug) {
+            console.warn(
+                `[OpenSeaSalesClient] could not resolve slug for ${args.contract} on ${chain}; skipping cancellations fetch.`,
+            );
+            return { listings: [], nextCursor: args.cursor };
+        }
+
+        const limit = Math.min(args.limit ?? 50, 50);
+        const after = args.cursor ? Number(args.cursor) : undefined;
+
+        try {
+            const response = await axios.get<OpenSeaEventsResponse>(
+                `https://api.opensea.io/api/v2/events/collection/${slug}`,
+                {
+                    params: { event_type: 'cancel', after, limit },
+                    headers: { 'X-API-KEY': this.apiKey, accept: 'application/json' },
+                    timeout: 15_000,
+                },
+            );
+
+            const events = response.data?.asset_events ?? [];
+            const cancellations = events
+                .filter(e => {
+                    const t = (e.event_type ?? '').toLowerCase();
+                    return t === 'cancel' || t === 'cancellation';
+                })
+                .map(e => this.normalizeCancellation(e as OpenSeaListingLikeEvent, chain))
+                .filter((l): l is NormalizedListing => l !== null);
+
+            const maxTs = cancellations.reduce(
+                (acc, l) => (l.timestamp > acc ? l.timestamp : acc),
+                after ?? 0,
+            );
+
+            return {
+                listings: cancellations,
+                nextCursor: maxTs ? String(maxTs + 1) : args.cursor,
+            };
+        } catch (error) {
+            const message = error instanceof Error ? error.message : String(error);
+            console.error(
+                `[OpenSeaSalesClient] /events/collection/${slug}?event_type=cancel failed: ${message}`,
+            );
+            return { listings: [], nextCursor: args.cursor };
+        }
+    }
+
+    private normalizeCancellation(event: OpenSeaListingLikeEvent, chain: string): NormalizedListing | null {
+        const nft = event.nft || event.asset;
+        const contract = nft?.contract;
+        const timestamp = event.event_timestamp ?? event.closing_date;
+        if (!contract || !timestamp) return null;
+
+        const priceNative = paymentToNative(event.payment);
+        const tokenPart = nft?.identifier ?? event.order_hash ?? '0';
+        const eventId = ['opensea', chain, 'cancel', contract.toLowerCase(), String(timestamp), tokenPart].join(
+            ':',
+        );
+
+        return {
+            eventId,
+            chain,
+            contract: contract.toLowerCase(),
+            tokenId: nft?.identifier,
+            timestamp,
+            maker: (event.seller ?? '').toLowerCase(),
+            priceNative,
+            currency: event.payment?.symbol ?? 'ETH',
+            marketplace: 'OpenSea',
+            orderHash: event.order_hash,
             raw: event,
         };
     }

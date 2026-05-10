@@ -13,7 +13,13 @@ require('dotenv').config();
 require('ts-node').register({ transpileOnly: true, compilerOptions: { module: 'CommonJS' } });
 
 const { NFTMetadataClient, WalletProfileClient } = require('../packages/analytics/src');
-const { createWhaleBuyEmbed, createMassListingEmbed } = require('../apps/bot/src/embeds');
+const {
+    createWhaleBuyEmbed,
+    createMassListingEmbed,
+    createMassDelistEmbed,
+    createFloorImpactFollowupEmbed,
+    createHotMintEmbed,
+} = require('../apps/bot/src/embeds');
 
 function arg(name, fallback) {
     const idx = process.argv.indexOf(`--${name}`);
@@ -106,6 +112,80 @@ function arg(name, fallback) {
         console.log(`      ${f.value.replace(/\n/g, '\n      ')}`);
     }
     console.log('Footer:       ', json.footer?.text);
+
+    function logEmbedPreview(label, embed) {
+        const j = embed.toJSON();
+        console.log();
+        console.log(`=== ${label} ===`);
+        console.log('Title:       ', j.title);
+        console.log('Description: ', j.description);
+        console.log('Thumbnail:   ', j.thumbnail?.url || '(none)');
+        console.log('Color:       ', j.color);
+        for (const f of j.fields || []) {
+            console.log(`  • ${f.name}${f.inline ? ' (inline)' : ''}`);
+            console.log(`      ${String(f.value).replace(/\n/g, '\n      ')}`);
+        }
+        console.log('Footer:      ', j.footer?.text);
+    }
+
+    const colMetaMass = await nfts.fetchCollection(contract).catch(() => null);
+    logEmbedPreview(
+        'Mass listing (with floor + 10m footer)',
+        createMassListingEmbed({
+            collectionName: colMetaMass?.name ?? 'Example collection',
+            contract,
+            chain: 'ethereum',
+            listingCount: 12,
+            windowMs: 300000,
+            collectionMeta: colMetaMass,
+            floorBeforeEth: 1.254,
+            floorImpactPending: true,
+        }),
+    );
+
+    logEmbedPreview(
+        'Mass delist',
+        createMassDelistEmbed({
+            collectionName: colMetaMass?.name ?? 'Example collection',
+            contract,
+            chain: 'ethereum',
+            delistCount: 14,
+            windowMs: 1080000,
+            sampleOrderIds: ['0xabc…', '0xdef…', 'tokenId:42'],
+            collectionMeta: colMetaMass,
+            floorBeforeEth: 1.254,
+            floorImpactPending: true,
+        }),
+    );
+
+    logEmbedPreview(
+        'Floor impact follow-up (reply body)',
+        createFloorImpactFollowupEmbed({
+            alertType: 'MASS_DELIST',
+            contract,
+            floorBefore: 1.254,
+            floorAfter: 1.31,
+            pctChange: ((1.31 - 1.254) / 1.254) * 100,
+        }),
+    );
+
+    logEmbedPreview(
+        'Hot mint',
+        createHotMintEmbed({
+            collectionName: colMetaMass?.name ?? 'Example collection',
+            contract,
+            chain: 'ethereum',
+            uniqueMinters: 48,
+            totalMints: 120,
+            windowMinutes: 10,
+            velocityPerMin: 12,
+            pctSupplyMinted: 2.4,
+            floorEth: 0.045,
+            blockRange: '12_450_100 → 12_450_980',
+            topMinerLines: ['• vitalik.eth — 9 mints', '• 0x1234…abcd — 7 mints'],
+            collectionMeta: colMetaMass,
+        }),
+    );
 
     const massLinksNoSlug =
         createMassListingEmbed({

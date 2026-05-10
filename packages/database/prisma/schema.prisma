@@ -81,6 +81,10 @@ model TrackedCollection {
   floorRiseAlertPct       Float?                // Alert when floor rises by this %
   sweepThresholdNative    Float?                // Min total ETH (native) for sweep alerts
   massListingThreshold    Int?                  // Min listings in window for surge alerts
+  hotMintEnabled          Boolean               @default(true)
+  hotMintChannelId        String?
+  delistAlertEnabled      Boolean               @default(true)
+  delistChannelId         String?
   alertChannelId          String?               // Discord channel ID (string, not FK)
   mentionRoleId           String?               // Discord Role ID to ping
   guild                   Guild     @relation(fields: [guildId], references: [id])
