@@ -43,13 +43,15 @@ model User {
 model AlertChannel {
   id               String          @id @default(uuid())
   guildId          String
-  discordChannelId String          @unique  // Discord Channel ID
+  discordChannelId String          // Discord Channel ID (snowflake)
   name             String
-  alertType        String          // "WHALE_BUY" | "MINT_RADAR" | "COLLECTION_TRACK" | "FLOOR_DROP"
+  alertType        String          // e.g. WHALE_BUY | WHALE_SALE | MINT_RADAR
   mentionRoleId    String?         // Discord Role ID to ping
   guild            Guild           @relation(fields: [guildId], references: [id])
   createdAt        DateTime        @default(now())
   updatedAt        DateTime        @updatedAt
+
+  @@unique([guildId, alertType])
 }
 
 // --- Tracking Models ---

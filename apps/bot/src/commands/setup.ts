@@ -40,15 +40,31 @@ export async function execute(interaction: ChatInputCommandInteraction) {
 
         // Create default alert rules
         await prisma.alertChannel.upsert({
-            where:  { discordChannelId: whaleChannel.id },
-            create: { guildId: guild.id, discordChannelId: whaleChannel.id, name: whaleChannel.name || 'whale-alerts', alertType: 'WHALE_BUY' },
-            update: { alertType: 'WHALE_BUY' },
+            where: { guildId_alertType: { guildId: guild.id, alertType: 'WHALE_BUY' } },
+            create: {
+                guildId: guild.id,
+                discordChannelId: whaleChannel.id,
+                name: whaleChannel.name || 'whale-alerts',
+                alertType: 'WHALE_BUY',
+            },
+            update: {
+                discordChannelId: whaleChannel.id,
+                name: whaleChannel.name || 'whale-alerts',
+            },
         });
 
         await prisma.alertChannel.upsert({
-            where:  { discordChannelId: mintChannel.id },
-            create: { guildId: guild.id, discordChannelId: mintChannel.id, name: mintChannel.name || 'mint-alerts', alertType: 'MINT_RADAR' },
-            update: { alertType: 'MINT_RADAR' },
+            where: { guildId_alertType: { guildId: guild.id, alertType: 'MINT_RADAR' } },
+            create: {
+                guildId: guild.id,
+                discordChannelId: mintChannel.id,
+                name: mintChannel.name || 'mint-alerts',
+                alertType: 'MINT_RADAR',
+            },
+            update: {
+                discordChannelId: mintChannel.id,
+                name: mintChannel.name || 'mint-alerts',
+            },
         });
 
         const embed = new EmbedBuilder()

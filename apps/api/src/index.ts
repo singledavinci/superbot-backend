@@ -8,6 +8,75 @@ import axios from 'axios';
 
 dotenv.config();
 
+const ETH_ADDRESS_RE = /^0x[a-fA-F0-9]{40}$/;
+const DISCORD_SNOWFLAKE_RE = /^\d{17,20}$/;
+
+function parseEthAddress(raw: unknown): string | null {
+    if (typeof raw !== 'string') return null;
+    const s = raw.trim();
+    return ETH_ADDRESS_RE.test(s) ? s.toLowerCase() : null;
+}
+
+/** Discord channel or role snowflake. */
+function parseSnowflake(raw: unknown): string | null {
+    if (raw === null || raw === undefined) return null;
+    if (typeof raw !== 'string') return null;
+    const s = raw.trim();
+    if (!s) return null;
+    return DISCORD_SNOWFLAKE_RE.test(s) ? s : null;
+}
+
+async function prismaGuildInternalIdOr404(
+    discordGuildId: string,
+    res: express.Response,
+): Promise<string | null> {
+    const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+    if (!guild) {
+        res.status(404).json({ error: 'Guild not found' });
+        return null;
+    }
+    return guild.id;
+}
+
+async function collectGuildDeliveryDiscordChannelIds(guildInternalId: string): Promise<string[]> {
+    const guild = await prisma.guild.findUnique({
+        where: { id: guildInternalId },
+        include: {
+            alertChannels: true,
+            trackedWallets: true,
+            trackedCollections: true,
+        },
+    });
+    if (!guild) return [];
+    const ids = new Set<string>();
+    for (const ch of guild.alertChannels) {
+        if (ch.discordChannelId) ids.add(ch.discordChannelId);
+    }
+    for (const w of guild.trackedWallets) {
+        if (w.alertChannelId) ids.add(w.alertChannelId);
+    }
+    for (const col of guild.trackedCollections) {
+        if (col.alertChannelId) ids.add(col.alertChannelId);
+        if (col.hotMintChannelId) ids.add(col.hotMintChannelId);
+        if (col.delistChannelId) ids.add(col.delistChannelId);
+    }
+    return [...ids];
+}
+
+function decodeJwtDiscordUserId(req: express.Request): string | null {
+    try {
+        const authHeader = req.headers.authorization;
+        if (!authHeader?.startsWith('Bearer ')) return null;
+        const token = authHeader.slice('Bearer '.length).trim();
+        const decoded = jwt.verify(token, process.env.JWT_SECRET || 'super_secret_jwt_key') as { id?: string };
+        return typeof decoded.id === 'string' && decoded.id.trim() ? decoded.id.trim() : null;
+    } catch {
+        return null;
+    }
+}
+
+const ALERT_TYPE_PARAM_RE = /^[A-Z][A-Z0-9_]*$/;
+
 interface DashboardJwtPayload {
     id?: string;
     username?: string;
@@ -288,11 +357,29 @@ export class AdminAPI {
                 const authVer = typeof decoded.authSchemaVersion === 'number' ? decoded.authSchemaVersion : 0;
                 const requiresReauth = authVer < AUTH_SCHEMA_VERSION;
 
+                let eligibleGuildSummaries: { id: string; name: string }[] = [];
+                if (rawEligible.length > 0) {
+                    try {
+                        const rows = await prisma.guild.findMany({
+                            where: { discordId: { in: rawEligible } },
+                            select: { discordId: true, name: true },
+                        });
+                        const byId = new Map(rows.map((r) => [r.discordId, r.name]));
+                        eligibleGuildSummaries = rawEligible.map((id) => ({
+                            id,
+                            name: byId.get(id) ?? `Server ${id.slice(0, 8)}…`,
+                        }));
+                    } catch {
+                        eligibleGuildSummaries = rawEligible.map((id) => ({ id, name: id }));
+                    }
+                }
+
                 res.json({
                     userId: decoded.id ?? null,
                     username: decoded.username ?? null,
                     guildId,
                     eligibleGuildIds: rawEligible,
+                    eligibleGuildSummaries,
                     jwtIssuedAt:
                         typeof decoded.iat === 'number' ? new Date(decoded.iat * 1000).toISOString() : null,
                     gitSha: GIT_SHA,
@@ -367,13 +454,29 @@ export class AdminAPI {
             if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
                 const { address, label, alertChannelId } = req.body;
+                const normalized = parseEthAddress(address);
+                if (!normalized) {
+                    return res.status(400).json({ error: 'Invalid wallet address (expected 0x + 40 hex chars)' });
+                }
+                const channelOk = alertChannelId == null || alertChannelId === '' || parseSnowflake(alertChannelId);
+                if (!channelOk) {
+                    return res.status(400).json({ error: 'alertChannelId must be a numeric Discord channel id' });
+                }
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
                 if (!guild) return res.status(404).json({ error: 'Guild not found' });
 
                 const wallet = await prisma.trackedWallet.upsert({
-                    where: { address_guildId: { address: address.toLowerCase(), guildId: guild.id } },
-                    create: { guildId: guild.id, address: address.toLowerCase(), label, alertChannelId },
-                    update: { label, alertChannelId }
+                    where: { address_guildId: { address: normalized, guildId: guild.id } },
+                    create: {
+                        guildId: guild.id,
+                        address: normalized,
+                        label,
+                        alertChannelId: alertChannelId ? String(alertChannelId).trim() : null,
+                    },
+                    update: {
+                        label,
+                        alertChannelId: alertChannelId ? String(alertChannelId).trim() : null,
+                    },
                 });
                 res.json({ success: true, wallet });
             } catch (error) {
@@ -438,13 +541,26 @@ export class AdminAPI {
             if (!this.requireGuildAccess(req, res, discordGuildId)) return;
             try {
                 const { contract, name, floorAlertPct, alertChannelId } = req.body;
+                const contractNorm = parseEthAddress(contract);
+                if (!contractNorm) {
+                    return res.status(400).json({ error: 'Invalid contract address (expected 0x + 40 hex chars)' });
+                }
+                if (typeof name !== 'string' || !name.trim()) {
+                    return res.status(400).json({ error: 'Collection name is required' });
+                }
                 const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
                 if (!guild) return res.status(404).json({ error: 'Guild not found' });
 
                 const collection = await prisma.trackedCollection.upsert({
-                    where: { contractAddress_guildId: { contractAddress: contract.toLowerCase(), guildId: guild.id } },
-                    create: { guildId: guild.id, contractAddress: contract.toLowerCase(), name, floorAlertPct: floorAlertPct ?? null, alertChannelId: alertChannelId ?? null },
-                    update: { name, floorAlertPct: floorAlertPct ?? null }
+                    where: { contractAddress_guildId: { contractAddress: contractNorm, guildId: guild.id } },
+                    create: {
+                        guildId: guild.id,
+                        contractAddress: contractNorm,
+                        name: name.trim(),
+                        floorAlertPct: floorAlertPct ?? null,
+                        alertChannelId: alertChannelId ? String(alertChannelId).trim() : null,
+                    },
+                    update: { name: name.trim(), floorAlertPct: floorAlertPct ?? null },
                 });
                 res.json({ success: true, collection });
             } catch (error) {
@@ -544,6 +660,364 @@ export class AdminAPI {
                 res.json({ success: true, user: updated });
             } catch (error) {
                 res.status(500).json({ error: 'Failed to update user settings' });
+            }
+        });
+
+        // Guild analytics (AlertDeliveryLog scoped to this guild's Discord channel snowflakes)
+        this.app.get('/api/v1/guilds/:id/stats', async (req, res) => {
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
+            try {
+                const internalId = await prismaGuildInternalIdOr404(discordGuildId, res);
+                if (!internalId) return;
+                const guild = await prisma.guild.findUnique({
+                    where: { id: internalId },
+                    include: { trackedWallets: true, trackedCollections: true, alertChannels: true },
+                });
+                if (!guild) return res.status(404).json({ error: 'Guild not found' });
+                const channelIds = await collectGuildDeliveryDiscordChannelIds(internalId);
+                const since24 = new Date(Date.now() - 24 * 60 * 60 * 1000);
+                const startUtcDay = new Date();
+                startUtcDay.setUTCHours(0, 0, 0, 0);
+
+                const alertsLast24h =
+                    channelIds.length > 0
+                        ? await prisma.alertDeliveryLog.count({
+                              where: {
+                                  channelId: { in: channelIds },
+                                  createdAt: { gte: since24 },
+                                  status: 'delivered',
+                              },
+                          })
+                        : 0;
+
+                const typeGroups =
+                    channelIds.length > 0
+                        ? await prisma.alertDeliveryLog.groupBy({
+                              by: ['alertType'],
+                              where: {
+                                  channelId: { in: channelIds },
+                                  createdAt: { gte: startUtcDay },
+                                  status: 'delivered',
+                              },
+                              _count: { _all: true },
+                          })
+                        : [];
+
+                res.json({
+                    wallets: guild.trackedWallets.length,
+                    collections: guild.trackedCollections.length,
+                    alertsLast24h,
+                    deliveredTodayByType: Object.fromEntries(
+                        typeGroups.map((g) => [g.alertType, g._count._all]),
+                    ),
+                });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to fetch guild stats' });
+            }
+        });
+
+        this.app.get('/api/v1/guilds/:id/recent-alerts', async (req, res) => {
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
+            try {
+                const internalId = await prismaGuildInternalIdOr404(discordGuildId, res);
+                if (!internalId) return;
+                const channelIds = await collectGuildDeliveryDiscordChannelIds(internalId);
+                if (channelIds.length === 0) {
+                    return res.json({ items: [] });
+                }
+                const since24 = new Date(Date.now() - 24 * 60 * 60 * 1000);
+                const items = await prisma.alertDeliveryLog.findMany({
+                    where: { channelId: { in: channelIds }, createdAt: { gte: since24 } },
+                    orderBy: { createdAt: 'desc' },
+                    take: 20,
+                    select: {
+                        id: true,
+                        alertType: true,
+                        status: true,
+                        channelId: true,
+                        eventId: true,
+                        createdAt: true,
+                        error: true,
+                    },
+                });
+                res.json({ items });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to fetch recent alerts' });
+            }
+        });
+
+        this.app.patch('/api/v1/guilds/:id/collections/:collectionId', async (req, res) => {
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
+            try {
+                const collectionId = this.soloRouteParam(req, 'collectionId');
+                if (!collectionId) return res.status(400).json({ error: 'Invalid collection id' });
+                const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+                if (!guild) return res.status(404).json({ error: 'Guild not found' });
+                const existing = await prisma.trackedCollection.findFirst({
+                    where: { id: collectionId, guildId: guild.id },
+                });
+                if (!existing) return res.status(404).json({ error: 'Collection not found' });
+
+                const body = req.body as Record<string, unknown>;
+                const data: Record<string, unknown> = {};
+
+                if (typeof body.name === 'string' && body.name.trim()) data.name = body.name.trim();
+
+                const numOrNull = (v: unknown): number | null | undefined => {
+                    if (v === undefined) return undefined;
+                    if (v === null) return null;
+                    const n = Number(v);
+                    return Number.isFinite(n) ? n : undefined;
+                };
+
+                const optNum = (key: string) => {
+                    if (!(key in body)) return;
+                    const v = numOrNull(body[key]);
+                    if (v !== undefined) data[key] = v;
+                };
+
+                optNum('floorAlertPct');
+                optNum('floorRiseAlertPct');
+                optNum('sweepThresholdNative');
+                optNum('massListingThreshold');
+
+                if (typeof body.hotMintEnabled === 'boolean') data.hotMintEnabled = body.hotMintEnabled;
+                if (typeof body.delistAlertEnabled === 'boolean')
+                    data.delistAlertEnabled = body.delistAlertEnabled;
+
+                if ('hotMintChannelId' in body) {
+                    const raw = body.hotMintChannelId;
+                    if (raw === null || raw === '') data.hotMintChannelId = null;
+                    else {
+                        const ch = parseSnowflake(raw);
+                        if (!ch) {
+                            return res.status(400).json({ error: 'hotMintChannelId must be a Discord channel id' });
+                        }
+                        data.hotMintChannelId = ch;
+                    }
+                }
+                if ('delistChannelId' in body) {
+                    const raw = body.delistChannelId;
+                    if (raw === null || raw === '') data.delistChannelId = null;
+                    else {
+                        const ch = parseSnowflake(raw);
+                        if (!ch) {
+                            return res.status(400).json({ error: 'delistChannelId must be a Discord channel id' });
+                        }
+                        data.delistChannelId = ch;
+                    }
+                }
+                if ('alertChannelId' in body) {
+                    const raw = body.alertChannelId;
+                    if (raw === null || raw === '') data.alertChannelId = null;
+                    else {
+                        const ch = parseSnowflake(raw);
+                        if (!ch) {
+                            return res.status(400).json({ error: 'alertChannelId must be a Discord channel id' });
+                        }
+                        data.alertChannelId = ch;
+                    }
+                }
+
+                if ('mentionRoleId' in body) {
+                    const raw = body.mentionRoleId;
+                    if (raw === null || raw === '') data.mentionRoleId = null;
+                    else {
+                        const role = parseSnowflake(raw);
+                        if (!role) {
+                            return res.status(400).json({ error: 'mentionRoleId must be a Discord role id' });
+                        }
+                        data.mentionRoleId = role;
+                    }
+                }
+
+                if (Object.keys(data).length === 0) {
+                    return res.status(400).json({ error: 'No valid fields to update' });
+                }
+
+                const collection = await prisma.trackedCollection.update({
+                    where: { id: existing.id },
+                    data: data as any,
+                });
+                res.json({ success: true, collection });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to update collection' });
+            }
+        });
+
+        this.app.get('/api/v1/guilds/:id/alert-channels', async (req, res) => {
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
+            try {
+                const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+                if (!guild) return res.status(404).json({ error: 'Guild not found' });
+                const channels = await prisma.alertChannel.findMany({
+                    where: { guildId: guild.id },
+                    orderBy: { alertType: 'asc' },
+                });
+                res.json({ channels });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to fetch alert channels' });
+            }
+        });
+
+        this.app.put('/api/v1/guilds/:id/alert-channels/:alertType', async (req, res) => {
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
+            try {
+                const rawType = this.soloRouteParam(req, 'alertType');
+                const alertType = decodeURIComponent(String(rawType ?? '')).trim().toUpperCase();
+                if (!ALERT_TYPE_PARAM_RE.test(alertType)) {
+                    return res.status(400).json({ error: 'Invalid alert type' });
+                }
+                const discordChannelId = parseSnowflake(req.body?.discordChannelId);
+                if (!discordChannelId) {
+                    return res.status(400).json({ error: 'discordChannelId is required (numeric Discord channel id)' });
+                }
+
+                let mentionRoleId: string | null | undefined = undefined;
+                if ('mentionRoleId' in req.body) {
+                    const raw = (req.body as any).mentionRoleId;
+                    if (raw === null || raw === '') mentionRoleId = null;
+                    else {
+                        const p = parseSnowflake(raw);
+                        if (!p)
+                            return res.status(400).json({ error: 'mentionRoleId must be a numeric Discord role id' });
+                        mentionRoleId = p;
+                    }
+                }
+
+                const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+                if (!guild) return res.status(404).json({ error: 'Guild not found' });
+
+                const nm =
+                    typeof (req.body as any)?.name === 'string' && String((req.body as any).name).trim().length > 0
+                        ? String((req.body as any).name).trim()
+                        : alertType;
+
+                const row = await prisma.alertChannel.upsert({
+                    where: { guildId_alertType: { guildId: guild.id, alertType } },
+                    create: {
+                        guildId: guild.id,
+                        discordChannelId,
+                        name: nm,
+                        alertType,
+                        mentionRoleId:
+                            mentionRoleId === undefined
+                                ? null
+                                : (mentionRoleId as string | null),
+                    },
+                    update: {
+                        discordChannelId,
+                        name: nm,
+                        ...(mentionRoleId !== undefined ? { mentionRoleId } : {}),
+                    },
+                });
+
+                res.json({ success: true, channel: row });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to save alert channel' });
+            }
+        });
+
+        this.app.delete('/api/v1/guilds/:id/alert-channels/:alertType', async (req, res) => {
+            const discordGuildId = this.guildRouteParam(req, res);
+            if (!discordGuildId) return;
+            if (!this.requireGuildAccess(req, res, discordGuildId)) return;
+            try {
+                const rawType = this.soloRouteParam(req, 'alertType');
+                const alertType = decodeURIComponent(String(rawType ?? '')).trim().toUpperCase();
+                if (!ALERT_TYPE_PARAM_RE.test(alertType)) {
+                    return res.status(400).json({ error: 'Invalid alert type' });
+                }
+                const guild = await prisma.guild.findUnique({ where: { discordId: discordGuildId } });
+                if (!guild) return res.status(404).json({ error: 'Guild not found' });
+                await prisma.alertChannel.deleteMany({ where: { guildId: guild.id, alertType } });
+                res.json({ success: true });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to delete alert channel route' });
+            }
+        });
+
+        this.app.get('/api/v1/watchlist', async (req, res) => {
+            const discordUserId = decodeJwtDiscordUserId(req);
+            if (!discordUserId) return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED', status: 401 });
+            try {
+                const user = await prisma.user.findUnique({
+                    where: { discordId: discordUserId },
+                    include: { watchlists: { orderBy: { createdAt: 'desc' } } },
+                });
+                res.json({ items: user?.watchlists ?? [] });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to fetch watchlist' });
+            }
+        });
+
+        this.app.post('/api/v1/watchlist', async (req, res) => {
+            const discordUserId = decodeJwtDiscordUserId(req);
+            if (!discordUserId) return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED', status: 401 });
+            try {
+                const { targetType, targetAddress } = req.body as { targetType?: string; targetAddress?: string };
+                const tt = typeof targetType === 'string' ? targetType.trim().toLowerCase() : '';
+                if (tt !== 'wallet' && tt !== 'collection') {
+                    return res.status(400).json({ error: 'targetType must be wallet or collection' });
+                }
+                const addrRaw = typeof targetAddress === 'string' ? targetAddress.trim() : '';
+                const addrNorm = parseEthAddress(addrRaw);
+                if (!addrNorm) {
+                    return res.status(400).json({ error: 'targetAddress must be a valid 0x address' });
+                }
+                const user = await prisma.user.upsert({
+                    where: { discordId: discordUserId },
+                    create: { discordId: discordUserId },
+                    update: {},
+                });
+                await prisma.watchlist.upsert({
+                    where: {
+                        userId_targetType_targetAddress: {
+                            userId: user.id,
+                            targetType: tt,
+                            targetAddress: addrNorm,
+                        },
+                    },
+                    create: {
+                        userId: user.id,
+                        targetType: tt,
+                        targetAddress: addrNorm,
+                    },
+                    update: {},
+                });
+                const rows = await prisma.watchlist.findMany({
+                    where: { userId: user.id },
+                    orderBy: { createdAt: 'desc' },
+                });
+                const created = rows.find((w) => w.targetType === tt && w.targetAddress === addrNorm);
+                res.json({ success: true, item: created ?? null });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to add watchlist entry' });
+            }
+        });
+
+        this.app.delete('/api/v1/watchlist/:itemId', async (req, res) => {
+            const discordUserId = decodeJwtDiscordUserId(req);
+            if (!discordUserId) return res.status(401).json({ error: 'Unauthorized', code: 'UNAUTHORIZED', status: 401 });
+            try {
+                const itemId = this.soloRouteParam(req, 'itemId');
+                if (!itemId) return res.status(400).json({ error: 'Invalid watchlist item id' });
+                const user = await prisma.user.findUnique({ where: { discordId: discordUserId } });
+                if (!user) return res.json({ success: true });
+                await prisma.watchlist.deleteMany({ where: { id: itemId, userId: user.id } });
+                res.json({ success: true });
+            } catch (error) {
+                res.status(500).json({ error: 'Failed to remove watchlist item' });
             }
         });
 

@@ -82,6 +82,20 @@ function shortEthAddr(addr: string): string {
     return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
+type AlertChannelRouting = { alertType: string; discordChannelId: string };
+
+/** First matching alert-type row wins; used so dashboard can add dedicated routes per type. */
+function discordChannelForTypes(
+    channels: AlertChannelRouting[],
+    preferenceOrder: string[],
+): string | null {
+    for (const t of preferenceOrder) {
+        const row = channels.find(c => c.alertType === t);
+        if (row?.discordChannelId) return row.discordChannelId;
+    }
+    return null;
+}
+
 export class EventWorker {
     private snipers = new Map<string, SniperEngine>();
     private sweepDetector = new SweepDetector();
@@ -796,12 +810,23 @@ export class EventWorker {
 
             if (!guild) continue;
 
-            const defaultWhaleChannelId =
-                guild.alertChannels.find(c => c.alertType === 'WHALE_BUY')?.discordChannelId ?? null;
-
             const relevantWallets = combinedTracked.filter(t => t.guildId === gid);
 
             for (const wallet of relevantWallets) {
+                const whaleAlertType =
+                    eventType === 'SALE'
+                        ? 'WHALE_SALE'
+                        : eventType === 'MINT'
+                          ? 'WHALE_MINT'
+                          : 'WHALE_BUY';
+                const defaultWhaleChannelId = discordChannelForTypes(guild.alertChannels, [
+                    whaleAlertType,
+                    ...(whaleAlertType === 'WHALE_SALE'
+                        ? (['WHALE_BUY'] as const)
+                        : whaleAlertType === 'WHALE_MINT'
+                          ? (['WHALE_BUY'] as const)
+                          : (['WHALE_SALE'] as const)),
+                ]);
                 const channelId = wallet.alertChannelId ?? defaultWhaleChannelId;
                 if (!channelId) {
                     console.warn(
@@ -875,13 +900,6 @@ export class EventWorker {
                     String(tokenId),
                     { collectionName: whaleCollectionLabel },
                 );
-
-                const whaleAlertType =
-                    eventType === 'SALE'
-                        ? 'WHALE_SALE'
-                        : eventType === 'MINT'
-                          ? 'WHALE_MINT'
-                          : 'WHALE_BUY';
 
                 const whaleDiscordPayload: Record<string, unknown> = {
                     eventId,
@@ -1006,8 +1024,7 @@ export class EventWorker {
         if (!guild) return;
 
         const row = guild.trackedCollections[0];
-        const defaultWhaleChannelId =
-            guild.alertChannels.find(c => c.alertType === 'WHALE_BUY')?.discordChannelId ?? null;
+        const defaultWhaleChannelId = discordChannelForTypes(guild.alertChannels, ['CLUSTER_BUY', 'WHALE_BUY']);
         const channelId = row?.alertChannelId ?? defaultWhaleChannelId;
         if (!channelId) {
             console.warn(
@@ -1283,8 +1300,11 @@ export class EventWorker {
         for (const row of collections) {
             if (!row.hotMintEnabled) continue;
             const guild = guildById.get(row.guildId);
-            const defaultWhaleChannel =
-                guild?.alertChannels.find(c => c.alertType === 'WHALE_BUY')?.discordChannelId ?? null;
+            const defaultWhaleChannel = discordChannelForTypes(guild?.alertChannels ?? [], [
+                'HOT_MINT',
+                'WHALE_BUY',
+                'MINT_RADAR',
+            ]);
             const channelId = row.hotMintChannelId ?? row.alertChannelId ?? defaultWhaleChannel;
             if (!channelId) {
                 console.warn(`[Worker] HOT_MINT: no channel row=${row.id} contract=${det.contract}`);
