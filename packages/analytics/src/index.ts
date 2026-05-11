@@ -17,3 +17,7 @@ export * from './WalletProfile';
 export * from './rpcUrls';
 export * from './RpcPool';
 export * from './WalletActionBatcher';
+export * from './OpportunityWindowStore';
+export * from './opportunityScoring';
+export * from './opportunityMetricsFromRedis';
+export * from './opportunityGuildSettings';

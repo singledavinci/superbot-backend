@@ -16,7 +16,7 @@
     "start:market-indexer": "SERVICE_TYPE=market-indexer node dist/src/index.js",
     "start:floor-worker": "SERVICE_TYPE=floor-worker node dist/src/index.js",
     "build": "prisma generate --schema=packages/database/prisma/schema.prisma && tsc",
-    "test": "node --test --require ts-node/register/transpile-only packages/intelligence/src/__tests__/contextual-intelligence.test.ts packages/analytics/src/__tests__/NFTMetadata.test.ts packages/analytics/src/__tests__/CollectionNameResolver.test.ts packages/analytics/src/__tests__/NftNameResolver.test.ts packages/analytics/src/__tests__/WalletActionBatcher.test.ts",
+    "test": "node --test --require ts-node/register/transpile-only packages/analytics/src/__tests__/opportunityScoring.test.ts apps/bot/src/__tests__/opportunityEmbed.test.ts packages/intelligence/src/__tests__/contextual-intelligence.test.ts packages/analytics/src/__tests__/NFTMetadata.test.ts packages/analytics/src/__tests__/CollectionNameResolver.test.ts packages/analytics/src/__tests__/NftNameResolver.test.ts packages/analytics/src/__tests__/WalletActionBatcher.test.ts",
     "lint": "node -e \"console.log('No eslint config in repo'); process.exit(0)\""
   },
   "engines": {

@@ -18,6 +18,7 @@ import {
     createFloorImpactFollowupEmbed,
     createHotMintEmbed,
     createWalletActionBatchEmbed,
+    createOpportunitySpikeEmbed,
 } from './embeds';
 import type { ContextualExplanation } from '@superbot/types';
 import { formatFallbackCollectionName } from '@superbot/analytics';
@@ -557,6 +558,41 @@ export class SuperBot {
                 await channel.send({
                     content,
                     embeds: [embed],
+                    allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
+                });
+            } else if (alertType === 'OPPORTUNITY_SPIKE') {
+                const slug = data.collectionMeta?.slug ?? null;
+                const embed = createOpportunitySpikeEmbed({
+                    collectionName:
+                        typeof data.collectionName === 'string' && data.collectionName.trim()
+                            ? data.collectionName.trim()
+                            : formatFallbackCollectionName(String(data.contract || '')),
+                    contract: String(data.contract || ''),
+                    chain: typeof data.chain === 'string' ? data.chain : 'ethereum',
+                    timeWindow: String(data.timeWindow || '15–60m rolling'),
+                    score: Number(data.score) || 0,
+                    signal: String(data.signal || '—'),
+                    confidence: String(data.confidence || '—'),
+                    volumeChange: String(data.volumeChange || '—'),
+                    tradeCount: String(data.tradeCount || '—'),
+                    uniqueBuyers: String(data.uniqueBuyers || '—'),
+                    sweepActivity: String(data.sweepActivity || '—'),
+                    floorChange: String(data.floorChange || '—'),
+                    listingPressure: String(data.listingPressure || '—'),
+                    trackedWalletActivity: String(data.trackedWalletActivity || '—'),
+                    riskFlags: String(data.riskFlags || '—'),
+                    dataLimitations: String(data.dataLimitations || '—'),
+                    collectionMeta: data.collectionMeta ?? null,
+                    contextualExplanation: data.contextualExplanation ?? null,
+                    aiNarrative: data.aiNarrative ?? undefined,
+                });
+                const row = new ActionRowBuilder<ButtonBuilder>().addComponents(
+                    ...collectionMarketplaceButtons(String(data.contract || ''), slug),
+                );
+                await channel.send({
+                    content,
+                    embeds: [embed],
+                    components: [row],
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
             } else if (alertType === 'CLUSTER_BUY') {

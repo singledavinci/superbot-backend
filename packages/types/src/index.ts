@@ -24,7 +24,16 @@ export type ContextualSignalLabel =
     | 'Strong bearish signal'
     | 'Suspicious activity'
     | 'High-risk momentum'
-    | 'Insufficient data';
+    | 'Insufficient data'
+    /** Collection Opportunity Monitor (informational; not trade advice). */
+    | 'Strong momentum signal'
+    | 'Developing opportunity signal'
+    | 'Early watch signal'
+    | 'Weak / unconfirmed'
+    | 'Ignore'
+    | 'Suspicious momentum'
+    | 'High-risk momentum signal'
+    | 'Insufficient verified data';
 
 export type ConfidenceLevel = 'high' | 'medium' | 'low' | 'insufficient';
 

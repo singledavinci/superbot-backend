@@ -25,9 +25,18 @@ export function mapContextualSignalToGrade(signal: ContextualSignalLabel): Signa
         case 'Strong bearish signal':
             return 'Strong Bearish';
         case 'Suspicious activity':
+        case 'Suspicious momentum':
             return 'Suspicious Activity';
         case 'High-risk momentum':
+        case 'High-risk momentum signal':
             return 'High Risk';
+        case 'Strong momentum signal':
+        case 'Developing opportunity signal':
+        case 'Early watch signal':
+        case 'Weak / unconfirmed':
+        case 'Ignore':
+        case 'Insufficient verified data':
+            return 'Neutral';
         case 'Insufficient data':
         default:
             return 'Neutral';
@@ -564,6 +573,44 @@ export function explainFloorMovement(i: FloorMoveIntelInput): ContextualExplanat
         nextWatch:
             `Compare cancellations, swept lots, whale prints, plus next scheduled floor-impact follow-ups.`,
         confidence: i.hasCorroboration ? 'medium' : 'low',
+        dataLimitations: limitations,
+    };
+}
+
+export interface OpportunitySpikeIntelInput {
+    collectionLabel: string;
+    windowLabel: string;
+    score: number;
+    signalLabel: string;
+    confidenceLabel: string;
+    riskLabel: string;
+    evidenceLines: string[];
+    limitations: string[];
+}
+
+/**
+ * Contextual block for OPPORTUNITY_SPIKE alerts — neutral, informational wording only.
+ */
+export function explainOpportunitySpike(i: OpportunitySpikeIntelInput): ContextualExplanation {
+    const limitations = i.limitations.length ? i.limitations : ['Signals may be incomplete or delayed.'];
+    const ev = capEvidence(i.evidenceLines.length ? i.evidenceLines : [INSUFF + ' for corroborating prints in this window.']);
+    const confLc = i.confidenceLabel.toLowerCase() as ConfidenceLevel;
+    const confidence: ConfidenceLevel =
+        confLc === 'high' || confLc === 'medium' || confLc === 'low' || confLc === 'insufficient'
+            ? confLc
+            : 'medium';
+
+    const signal = i.signalLabel as ContextualSignalLabel;
+
+    return {
+        event: `Collection "${i.collectionLabel}" showed a short-window activity cluster worth monitoring.`,
+        context: `Observed over ~${i.windowLabel}; interpretation is informational and requires confirmation before any action.`,
+        signal,
+        evidence: ev,
+        risk: i.riskLabel,
+        nextWatch:
+            'Watch closely for repeated prints, listing cancellations, and whether breadth holds across additional buyers.',
+        confidence,
         dataLimitations: limitations,
     };
 }

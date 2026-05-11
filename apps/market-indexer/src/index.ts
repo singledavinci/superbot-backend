@@ -9,8 +9,10 @@ import {
     SalesProvider,
     createRpcPoolFromEnv,
     CollectionNameResolver,
+    markOpportunityHotContract,
     type RpcPool,
 } from '@superbot/analytics';
+import { OpportunityMonitorRunner } from './opportunityMonitor';
 import {
     explainMassListing,
     explainMassDelist,
@@ -42,6 +44,8 @@ export class MarketIndexer {
     /** Per-contract minimum listing surge required (max of guild prefs). */
     private massListingMinByContract = new Map<string, number>();
     private massDelistMinDefault = Number(process.env.MASS_DELIST_MIN_COUNT) || 8;
+    private opportunityTimer: NodeJS.Timeout | null = null;
+    private opportunityRunner: OpportunityMonitorRunner | null = null;
 
     constructor() {
         const opensea = new OpenSeaSalesClient();
@@ -56,9 +60,32 @@ export class MarketIndexer {
     }
 
     public async start() {
+        process.on('uncaughtException', err => {
+            console.error('[MarketIndexer] uncaughtException:', err instanceof Error ? err.stack || err.message : err);
+        });
+        process.on('unhandledRejection', reason => {
+            console.error(
+                '[MarketIndexer] unhandledRejection:',
+                reason instanceof Error ? reason.stack || reason.message : reason,
+            );
+        });
+
+        if (process.env.OPPORTUNITY_MONITOR_ENABLED !== 'false') {
+            this.opportunityRunner = new OpportunityMonitorRunner(redisConnection);
+            const sec = Number(process.env.OPPORTUNITY_MONITOR_INTERVAL_SECONDS);
+            const oppMs = (Number.isFinite(sec) && sec > 0 ? sec : 120) * 1000;
+            this.opportunityTimer = setInterval(() => {
+                this.opportunityRunner
+                    ?.evaluateAndDispatch()
+                    .catch(err => console.error('[OpportunityMonitor] tick error:', err));
+            }, oppMs);
+            this.opportunityRunner.evaluateAndDispatch().catch(err => console.error('[OpportunityMonitor] boot error:', err));
+            console.log(`[MarketIndexer] Opportunity monitor scheduled every ${oppMs / 1000}s (Redis + DB).`);
+        }
+
         if (!this.provider) {
             console.warn(
-                '[MarketIndexer] OPENSEA_API_KEY not set — market indexer idle (no synthetic data). OpenSea is required for listings/floor polling.',
+                '[MarketIndexer] OPENSEA_API_KEY not set — listing/floor polling idle (no synthetic data). Opportunity monitor (if enabled) still runs on Redis/DB.',
             );
             await new Promise(() => {});
             return;
@@ -75,6 +102,7 @@ export class MarketIndexer {
 
     public async stop() {
         if (this.timer) clearInterval(this.timer);
+        if (this.opportunityTimer) clearInterval(this.opportunityTimer);
     }
 
     private async readFloorNative(chain: string, contract: string): Promise<number | null> {
@@ -197,6 +225,24 @@ export class MarketIndexer {
                     limit: 50,
                 });
 
+                const lc = contract.toLowerCase();
+                const listCount = listingResult.listings.length;
+                try {
+                    const prevK = `opportunity:listings_prev:${lc}`;
+                    const prev = await redisConnection.get(prevK);
+                    if (prev !== null && prev !== '') {
+                        await redisConnection.set(
+                            `opportunity:listings_delta:${lc}`,
+                            String(listCount - Number(prev)),
+                            'EX',
+                            900,
+                        );
+                    }
+                    await redisConnection.set(prevK, String(listCount), 'EX', 900);
+                } catch {
+                    /* ignore */
+                }
+
                 for (const listing of listingResult.listings) {
                     const det = this.listingDetector.ingest(listing, {
                         minListings: minForContract,
@@ -207,6 +253,7 @@ export class MarketIndexer {
                         } catch {
                             /* best-effort */
                         }
+                        await markOpportunityHotContract(redisConnection, det.chain, det.contract).catch(() => {});
                         await this.dispatchMassListing(det, floorBefore);
                     }
                 }
@@ -234,6 +281,7 @@ export class MarketIndexer {
                         minCancels: this.massDelistMinDefault,
                     });
                     if (del) {
+                        await markOpportunityHotContract(redisConnection, del.chain, del.contract).catch(() => {});
                         await this.dispatchMassDelist(del, floorBefore);
                     }
                 }

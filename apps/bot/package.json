@@ -10,6 +10,7 @@
   "dependencies": {
     "@superbot/analytics": "*",
     "@superbot/database": "*",
+    "@superbot/intelligence": "*",
     "@superbot/types": "*",
     "@superbot/queue": "*",
     "discord.js": "^14.26.4",

@@ -10,6 +10,7 @@ import {
     explainSweep,
     explainWhale,
     explainHotMint,
+    explainOpportunitySpike,
 } from '../contextualEngine';
 import { sanitizeAiOutput } from '../textGuards';
 
@@ -159,4 +160,23 @@ test('explainWhale does not expose randomness drift', () => {
         floorVsSnapshotPct: 2,
     });
     assert.equal(JSON.stringify(a), JSON.stringify(b));
+});
+
+test('explainOpportunitySpike returns full contextual block for /opportunity', () => {
+    const o = explainOpportunitySpike({
+        collectionLabel: 'Demo',
+        windowLabel: '30m',
+        score: 70,
+        signalLabel: 'Developing opportunity signal',
+        confidenceLabel: 'medium',
+        riskLabel: 'Medium risk',
+        evidenceLines: ['Trades up vs baseline.', 'Sweep prints present.'],
+        limitations: [],
+    });
+    assert.ok(o.event.includes('Demo'));
+    assert.ok(o.context.includes('informational'));
+    assert.ok(o.evidence.length >= 1);
+    assert.ok(o.risk.length > 0);
+    assert.ok(o.nextWatch.length > 0);
+    assert.ok(o.dataLimitations.length >= 0);
 });

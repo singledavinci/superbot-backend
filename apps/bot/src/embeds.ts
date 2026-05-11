@@ -919,6 +919,71 @@ export function createHotMintEmbed(data: {
     });
 }
 
+/** OPPORTUNITY_SPIKE — informational momentum watch; footer disclaimer required for compliance. */
+export function createOpportunitySpikeEmbed(data: {
+    collectionName: string;
+    contract: string;
+    chain: string;
+    timeWindow: string;
+    score: number;
+    signal: string;
+    confidence: string;
+    volumeChange: string;
+    tradeCount: string;
+    uniqueBuyers: string;
+    sweepActivity: string;
+    floorChange: string;
+    listingPressure: string;
+    trackedWalletActivity: string;
+    riskFlags: string;
+    dataLimitations: string;
+    collectionMeta?: CollectionMetadata | null;
+    contextualExplanation?: ContextualExplanation | null;
+    aiNarrative?: string | null;
+}) {
+    const coll = data.collectionName?.trim()
+        ? data.collectionName.trim()
+        : formatFallbackCollectionName(data.contract);
+    const slug = data.collectionMeta?.slug?.trim() || null;
+    const embed = new EmbedBuilder()
+        .setColor(0x6366f1)
+        .setTitle('Collection Opportunity Spike Detected')
+        .setDescription(`**${coll}** · \`${shortAddr(data.contract)}\``);
+
+    const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
+    if (thumb) embed.setThumbnail(thumb);
+
+    embed.addFields(
+        { name: 'Collection', value: coll, inline: false },
+        { name: 'Signal', value: data.signal, inline: true },
+        { name: 'Opportunity score', value: String(data.score), inline: true },
+        { name: 'Confidence', value: data.confidence, inline: true },
+        { name: 'Time window', value: data.timeWindow, inline: true },
+        { name: 'Volume change', value: data.volumeChange, inline: true },
+        { name: 'Trade count', value: data.tradeCount, inline: true },
+        { name: 'Unique buyers', value: data.uniqueBuyers, inline: true },
+        { name: 'Sweep activity', value: data.sweepActivity, inline: true },
+        { name: 'Floor change', value: data.floorChange, inline: true },
+        { name: 'Listing pressure', value: data.listingPressure, inline: true },
+        { name: 'Smart / tracked wallet activity', value: data.trackedWalletActivity, inline: false },
+        { name: 'Risk flags', value: data.riskFlags, inline: false },
+        { name: 'Data limitations', value: data.dataLimitations, inline: false },
+        {
+            name: 'Links',
+            value: markdownCollectionToolkit(data.contract, slug),
+            inline: false,
+        },
+    );
+
+    if (data.contextualExplanation) {
+        appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
+    }
+
+    return embed.setTimestamp().setFooter({
+        text: `SuperBot • ${STANDARD_MARKET_DISCLAIMER}`,
+    });
+}
+
 export function createFloorMovementEmbed(data: {
     collectionName: string;
     contract: string;

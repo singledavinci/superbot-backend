@@ -7,7 +7,9 @@ import {
     OpenSeaSalesClient,
     ReservoirSalesClient,
     SalesProvider,
+    hotContractsSetKey,
 } from '@superbot/analytics';
+import { redisConnection } from '@superbot/queue';
 
 dotenv.config();
 
@@ -111,6 +113,18 @@ export class SalesIndexer {
                 if (chain !== 'ethereum') continue;
                 const contract = c.contractAddress.toLowerCase();
                 unique.set(`${chain}:${contract}`, { contract, chain: 'ethereum' });
+            }
+
+            let extraHot: string[] = [];
+            try {
+                extraHot = await redisConnection.smembers(hotContractsSetKey('ethereum'));
+            } catch {
+                extraHot = [];
+            }
+            for (const addr of extraHot) {
+                if (typeof addr === 'string' && addr.startsWith('0x') && addr.length === 42) {
+                    unique.set(`ethereum:${addr.toLowerCase()}`, { contract: addr.toLowerCase(), chain: 'ethereum' });
+                }
             }
 
             for (const { contract, chain } of unique.values()) {

@@ -32,6 +32,11 @@ import {
     mapEngineBehaviorToBatchKey,
     parseStoredWhaleBatchEvents,
     type WhaleActionBatchStoredEvent,
+    markOpportunityHotContract,
+    recordOpportunityTrade,
+    recordOpportunitySweep,
+    recordOpportunityTrackedBuy,
+    isOpportunityHotContract,
 } from '@superbot/analytics';
 import { SniperEngine } from '@superbot/utils';
 import {
@@ -706,6 +711,13 @@ export class EventWorker {
         const effectivePriceEth =
             parseFloat(price) > 0 ? parseFloat(price) : jobPriceNative && jobPriceNative > 0 ? jobPriceNative : 0;
 
+        const tsMillis =
+            jobTs !== undefined && jobTs > 0
+                ? jobTs > 1e12
+                  ? jobTs
+                  : jobTs * 1000
+                : Date.now();
+
         if (effectivePriceEth > 0 && from !== '0x0000000000000000000000000000000000000000') {
             const normalized: NormalizedSale = {
                 eventId: eventId || `${txHash}:${tokenId}`,
@@ -725,6 +737,16 @@ export class EventWorker {
 
             const sweep = this.sweepDetector.ingest(normalized);
             if (sweep && trackedCollections.length > 0) {
+                await markOpportunityHotContract(redisConnection, sweep.chain, sweep.contract).catch(() => {});
+                await recordOpportunitySweep(redisConnection, {
+                    chain: sweep.chain,
+                    contract: sweep.contract,
+                    tsMs: tsMillis,
+                    eventId: sweep.eventId,
+                    itemCount: sweep.itemCount,
+                    totalNative: sweep.totalNative,
+                    uniqueBuyers: 1,
+                }).catch(() => {});
                 await this.dispatchSweep(sweep, trackedCollections);
             }
 
@@ -734,8 +756,27 @@ export class EventWorker {
                 seenClusterGuilds.add(w.guildId);
                 const cluster = this.clusterDetector.ingest(normalized, w.guildId);
                 if (cluster) {
+                    await markOpportunityHotContract(redisConnection, cluster.chain, cluster.contract).catch(() => {});
                     await this.dispatchClusterBuy(cluster);
                 }
+            }
+
+            const chainLcOp = (chain || 'ethereum').toLowerCase();
+            const contractLcOp = contract.toLowerCase();
+            const shouldIngestTrade =
+                trackedCollections.length > 0 ||
+                (await isOpportunityHotContract(redisConnection, chainLcOp, contractLcOp));
+            if (shouldIngestTrade) {
+                await recordOpportunityTrade(redisConnection, {
+                    chain: chainLcOp,
+                    contract: contractLcOp,
+                    tsMs: tsMillis,
+                    buyer: normalized.buyer,
+                    seller: normalized.seller,
+                    priceNative: effectivePriceEth,
+                    txHash,
+                    eventId: normalized.eventId,
+                }).catch(() => {});
             }
         }
 
@@ -745,13 +786,6 @@ export class EventWorker {
             eventType = 'SALE';
             price = String(effectivePriceEth);
         }
-
-        const tsMillis =
-            jobTs !== undefined && jobTs > 0
-                ? jobTs > 1e12
-                  ? jobTs
-                  : jobTs * 1000
-                : Date.now();
 
         // 3. Analytics Persistence (ClickHouse)
         try {
@@ -929,6 +963,17 @@ export class EventWorker {
                     'WHALE_BUY',
                     'WHALE_SALE',
                 ]);
+                if (whaleAlertType === 'WHALE_BUY' && !isSeller) {
+                    await markOpportunityHotContract(redisConnection, chainLc, contractLcEff).catch(() => {});
+                    await recordOpportunityTrackedBuy(
+                        redisConnection,
+                        chainLc,
+                        contractLcEff,
+                        tsMillis,
+                        `${wallet.id}:${eventId}:${txHash}`,
+                    ).catch(() => {});
+                }
+
                 const whaleDiscordPayload: Record<string, unknown> = {
                     eventId,
                     channelId,
@@ -1262,6 +1307,8 @@ export class EventWorker {
             include: { alertChannels: true },
         });
         const guildById = new Map(guilds.map(g => [g.id, g]));
+
+        await markOpportunityHotContract(redisConnection, det.chain, det.contract).catch(() => {});
 
         const [collectionMeta] = await Promise.all([
             this.nftMetadata.fetchCollection(det.contract).catch(() => null),
