@@ -8,8 +8,7 @@
  *   OPENSEA_API_KEY (on mint-engine host for SeaDrop resolver)
  *
  * For job persistence (planHash, MintSimulation, metadata):
- *   SMOKE_GUILD_DISCORD_ID, SMOKE_USER_DISCORD_ID — must match an existing Guild/User with MintWallet for the wallet.
- *   SMOKE_WALLET_ADDRESS — used when --wallet is omitted (normalized lowercase).
+ *   SMOKE_GUILD_DISCORD_ID, SMOKE_USER_DISCORD_ID — must match an existing Guild/User with MintWallet for --wallet.
  *
  * Usage:
  *   node --require ts-node/register/transpile-only scripts/smoke-mint-preflight.ts \
@@ -85,8 +84,7 @@ async function postMint(
 
 async function main(): Promise<void> {
     const contract = arg('--contract');
-    const walletRaw = arg('--wallet', process.env.SMOKE_WALLET_ADDRESS?.trim());
-    const wallet = walletRaw?.trim().toLowerCase() ?? '';
+    const wallet = arg('--wallet');
     const quantity = Math.max(1, Number(arg('--quantity', '1')));
     const mode = (arg('--mode', 'prepare') as string).toLowerCase();
     const chainId = Number(arg('--chain-id', String(process.env.SMOKE_CHAIN_ID || '1')));
@@ -94,10 +92,9 @@ async function main(): Promise<void> {
     const userDiscordId = arg('--user', process.env.SMOKE_USER_DISCORD_ID);
     const skipJob = hasFlag('--skip-job');
 
-    if (!contract || !wallet?.startsWith('0x')) {
+    if (!contract || !wallet) {
         console.error(
-            'Usage: --contract <0x…> [--wallet <0x…>] [--quantity 1] [--mode prepare|simulation] [--chain-id 1] [--guild …] [--user …] [--skip-job]\n' +
-                '  If --wallet is omitted, SMOKE_WALLET_ADDRESS from .env is used.',
+            'Usage: --contract <0x…> --wallet <0x…> [--quantity 1] [--mode prepare|simulation] [--chain-id 1] [--guild …] [--user …] [--skip-job]',
         );
         process.exit(2);
     }

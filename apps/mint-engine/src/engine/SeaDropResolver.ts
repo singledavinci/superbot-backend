@@ -37,6 +37,57 @@ function isUnsetPublicDrop(pd: { mintPrice: bigint; startTime: bigint; endTime: 
     return pd.mintPrice === 0n && pd.startTime === 0n && pd.endTime === 0n && pd.maxTotalMintableByWallet === 0n;
 }
 
+const zeroLc = ZeroAddress.toLowerCase();
+
+function isHexAddr40(s: string): boolean {
+    return /^0x[a-f0-9]{40}$/.test(s.trim().toLowerCase());
+}
+
+/**
+ * When `restrictFeeRecipients` is true, pick a fee recipient OpenSea will accept:
+ * optional env if allow-listed, else first `getAllowedFeeRecipients`, else creator payout if allow-listed.
+ */
+async function resolveRestrictedFeeRecipient(sd: Contract, nft: string): Promise<string> {
+    const envRaw = (process.env.MINT_SEADROP_FEE_RECIPIENT || '').trim().toLowerCase();
+    if (isHexAddr40(envRaw)) {
+        try {
+            const ok = (await sd.getFeeRecipientIsAllowed.staticCall(nft, envRaw)) as boolean;
+            if (ok) return envRaw;
+        } catch {
+            /* older minter without getter — try allowed list */
+        }
+    }
+
+    try {
+        const raw = (await sd.getAllowedFeeRecipients.staticCall(nft)) as string[];
+        if (Array.isArray(raw)) {
+            for (const a of raw) {
+                if (typeof a === 'string' && isHexAddr40(a) && a.toLowerCase() !== zeroLc) {
+                    return a.toLowerCase();
+                }
+            }
+        }
+    } catch {
+        /* optional on forks */
+    }
+
+    try {
+        const payout = (await sd.getCreatorPayoutAddress.staticCall(nft)) as string;
+        const p = typeof payout === 'string' ? payout.trim().toLowerCase() : '';
+        if (!isHexAddr40(p) || p === zeroLc) return ZeroAddress;
+        try {
+            const ok = (await sd.getFeeRecipientIsAllowed.staticCall(nft, p)) as boolean;
+            if (ok) return p;
+        } catch {
+            return p;
+        }
+    } catch {
+        /* */
+    }
+
+    return ZeroAddress;
+}
+
 /**
  * Resolves SeaDrop / OpenSea mint stages using:
  * - OpenSea **official** HTTP API (contract metadata only), and
@@ -189,6 +240,14 @@ export class SeaDropResolver {
         }
 
         const seaLc = seaDropAddr.toLowerCase();
+        let feeRecipientLc: string = ZeroAddress;
+        if (pd.restrictFeeRecipients) {
+            feeRecipientLc = await resolveRestrictedFeeRecipient(sd, nft);
+        } else {
+            const e = (process.env.MINT_SEADROP_FEE_RECIPIENT || '').trim().toLowerCase();
+            feeRecipientLc = isHexAddr40(e) ? e : ZeroAddress;
+        }
+
         const drop: ResolvedDrop = {
             chainId: args.chainId,
             collectionAddress: nft,
@@ -208,15 +267,16 @@ export class SeaDropResolver {
             functionSelector: MINT_PUBLIC_SELECTOR,
             mintFunction: 'mintPublic',
             openSeaCollectionSlug: openSeaSlug,
-            feeRecipient: process.env.MINT_SEADROP_FEE_RECIPIENT?.trim() || ZeroAddress,
+            feeRecipient: feeRecipientLc,
             restrictFeeRecipients: pd.restrictFeeRecipients,
         };
 
-        if (drop.restrictFeeRecipients && drop.feeRecipient === ZeroAddress) {
+        if (drop.restrictFeeRecipients && (!drop.feeRecipient || drop.feeRecipient.toLowerCase() === zeroLc)) {
             return {
                 ok: false,
                 code: 'FAIL_NOT_ELIGIBLE',
-                message: 'restrictFeeRecipients=true requires MINT_SEADROP_FEE_RECIPIENT to be set to an allowed recipient',
+                message:
+                    'restrictFeeRecipients=true but no allowed fee recipient found on-chain (getAllowedFeeRecipients / creator payout). Set MINT_SEADROP_FEE_RECIPIENT to an allow-listed address.',
             };
         }
 

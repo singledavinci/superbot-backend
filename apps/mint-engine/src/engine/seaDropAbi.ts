@@ -18,6 +18,9 @@ export const SEA_DROP_IFACE = new Interface([
     'function getPublicDrop(address nftContract) view returns (tuple(uint80 mintPrice,uint48 startTime,uint48 endTime,uint16 maxTotalMintableByWallet,uint16 feeBps,bool restrictFeeRecipients))',
     'function getAllowListMerkleRoot(address nftContract) view returns (bytes32)',
     'function getSigners(address nftContract) view returns (address[])',
+    'function getAllowedFeeRecipients(address nftContract) view returns (address[])',
+    'function getFeeRecipientIsAllowed(address nftContract, address feeRecipient) view returns (bool)',
+    'function getCreatorPayoutAddress(address nftContract) view returns (address)',
     'function mintPublic(address nftContract,address feeRecipient,address minterIfNotPayer,uint256 quantity) payable',
 ]);
 
