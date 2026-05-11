@@ -163,6 +163,20 @@ export class SalesIndexer {
             // pipeline can ingest sales without changes. We tag as
             // `erc721_transfer` so it routes through `handleTransfer` and
             // triggers a SALE alert (price > 0, from/to non-zero).
+            try {
+                const tid = sale.tokenId != null ? String(sale.tokenId) : '';
+                if (tid) {
+                    await redisConnection.set(
+                        `listing_trade_recent:${chain}:${contract}:${tid}`,
+                        '1',
+                        'EX',
+                        300,
+                    );
+                }
+            } catch {
+                /* best-effort */
+            }
+
             await eventQueue.add(
                 'nft_transfer',
                 {

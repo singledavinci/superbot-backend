@@ -801,6 +801,16 @@ export class EventWorker {
                     eventId: normalized.eventId,
                 }).catch(() => {});
             }
+            try {
+                await redisConnection.set(
+                    `listing_trade_recent:${chainLcOp}:${contractLcOp}:${String(tokenId)}`,
+                    '1',
+                    'EX',
+                    300,
+                );
+            } catch {
+                /* best-effort */
+            }
         }
 
         if (trackedBuyers.length === 0 && trackedSellers.length === 0) return;

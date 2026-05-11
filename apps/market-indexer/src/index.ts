@@ -12,6 +12,7 @@ import {
     markOpportunityHotContract,
     type RpcPool,
 } from '@superbot/analytics';
+import type { NormalizedListing } from '@superbot/analytics';
 import { OpportunityMonitorRunner } from './opportunityMonitor';
 import {
     explainMassListing,
@@ -22,6 +23,34 @@ import {
 dotenv.config();
 
 const FLOOR_IMPACT_DELAY_MS = Number(process.env.FLOOR_IMPACT_DELAY_MS) || 10 * 60 * 1000;
+
+const LISTING_SNAPSHOT_MAX = 500;
+const MAX_INFERRED_DELIST_LOOKUPS_PER_TICK = 50;
+const MASS_DELIST_INFER_FROM_LISTINGS = process.env.MASS_DELIST_INFER_FROM_LISTINGS !== 'false';
+
+function formatListingSnapshotKey(l: NormalizedListing): string {
+    const tid = (l.tokenId ?? '?').toString();
+    const maker = (l.maker ?? '').toLowerCase();
+    const price = Number.isFinite(l.priceNative) ? l.priceNative.toFixed(8) : '0';
+    return `${tid}|${maker}|${price}`;
+}
+
+function parseListingSnapshotKey(key: string): { tokenId: string; maker: string; priceNative: number } | null {
+    const first = key.indexOf('|');
+    if (first <= 0) return null;
+    const second = key.indexOf('|', first + 1);
+    if (second <= first) return null;
+    const tokenId = key.slice(0, first);
+    const maker = key.slice(first + 1, second);
+    const priceStr = key.slice(second + 1);
+    const priceNative = Number(priceStr);
+    return {
+        tokenId,
+        maker,
+        priceNative: Number.isFinite(priceNative) ? priceNative : 0,
+    };
+}
+
 
 /**
  * Polls OpenSea for floor snapshots + listing / cancel events per tracked contract (deduped),
@@ -268,36 +297,139 @@ export class MarketIndexer {
                     );
                 }
 
-                const cancelCursor = this.cancelCursorByContract.get(key);
-                const cancelResult = await this.provider.fetchCancellations({
-                    contract,
-                    chain,
-                    cursor: cancelCursor,
-                    limit: 50,
-                });
-
-                for (const c of cancelResult.listings) {
-                    const del = this.delistDetector.ingest(c, {
-                        minCancels: this.massDelistMinDefault,
+                if (MASS_DELIST_INFER_FROM_LISTINGS) {
+                    await this.applyListingSnapshotAndInferDelists({
+                        chain,
+                        contract,
+                        listings: listingResult.listings,
+                        floorBefore,
                     });
-                    if (del) {
-                        await markOpportunityHotContract(redisConnection, del.chain, del.contract).catch(() => {});
-                        await this.dispatchMassDelist(del, floorBefore);
+                } else {
+                    const cancelCursor = this.cancelCursorByContract.get(key);
+                    const cancelResult = await this.provider.fetchCancellations({
+                        contract,
+                        chain,
+                        cursor: cancelCursor,
+                        limit: 50,
+                    });
+
+                    for (const c of cancelResult.listings) {
+                        const del = this.delistDetector.ingest(c, {
+                            minCancels: this.massDelistMinDefault,
+                        });
+                        if (del) {
+                            await markOpportunityHotContract(redisConnection, del.chain, del.contract).catch(() => {});
+                            await this.dispatchMassDelist(del, floorBefore);
+                        }
                     }
-                }
 
-                if (cancelResult.nextCursor) {
-                    this.cancelCursorByContract.set(key, cancelResult.nextCursor);
-                }
+                    if (cancelResult.nextCursor) {
+                        this.cancelCursorByContract.set(key, cancelResult.nextCursor);
+                    }
 
-                if (cancelResult.listings.length > 0) {
-                    console.log(
-                        `[MarketIndexer] ${cancelResult.listings.length} cancel/delist events for ${contract} (cursor=${cancelResult.nextCursor ?? 'unchanged'})`,
-                    );
+                    if (cancelResult.listings.length > 0) {
+                        console.log(
+                            `[MarketIndexer] ${cancelResult.listings.length} cancel/delist events for ${contract} (cursor=${cancelResult.nextCursor ?? 'unchanged'})`,
+                        );
+                    }
                 }
             } catch (err) {
                 console.error(`[MarketIndexer] Failed ${contract}:`, err);
             }
+        }
+    }
+
+    private async applyListingSnapshotAndInferDelists(args: {
+        chain: string;
+        contract: string;
+        listings: NormalizedListing[];
+        floorBefore: number | null;
+    }): Promise<void> {
+        const { chain, contract, listings, floorBefore } = args;
+        const ch = (chain || 'ethereum').toLowerCase();
+        const c = contract.toLowerCase();
+        const redisKey = `listings:${ch}:${c}:current`;
+        let prevKeys: string[] = [];
+        try {
+            const raw = await redisConnection.get(redisKey);
+            if (raw) {
+                const parsed = JSON.parse(raw) as unknown;
+                if (Array.isArray(parsed)) {
+                    prevKeys = parsed.filter((x): x is string => typeof x === 'string');
+                }
+            }
+        } catch {
+            prevKeys = [];
+        }
+
+        const nextKeys = listings.slice(0, LISTING_SNAPSHOT_MAX).map(formatListingSnapshotKey);
+        const nextSet = new Set(nextKeys);
+        let inferred = 0;
+        let lookedUp = 0;
+
+        if (prevKeys.length > 0) {
+            for (const k of prevKeys) {
+                if (nextSet.has(k)) continue;
+                if (lookedUp >= MAX_INFERRED_DELIST_LOOKUPS_PER_TICK) break;
+
+                const parsed = parseListingSnapshotKey(k);
+                if (!parsed || !parsed.tokenId || parsed.tokenId === '?') continue;
+
+                lookedUp += 1;
+
+                try {
+                    const tradeRecent = await redisConnection.get(
+                        `listing_trade_recent:${ch}:${c}:${parsed.tokenId}`,
+                    );
+                    if (tradeRecent === '1') continue;
+                } catch {
+                    /* ignore redis errors */
+                }
+
+                const since = new Date(Date.now() - 5 * 60 * 1000);
+                const saleHit = await prisma.alertDeliveryLog.findFirst({
+                    where: {
+                        createdAt: { gte: since },
+                        alertType: { in: ['WHALE_SALE', 'WHALE_BUY'] },
+                        status: 'delivered',
+                        eventId: { contains: parsed.tokenId },
+                    },
+                    select: { id: true },
+                });
+                if (saleHit) continue;
+
+                const synthetic: NormalizedListing = {
+                    eventId: `inferred-cancel:${ch}:${c}:${parsed.tokenId}:${Date.now()}:${inferred}`,
+                    chain: ch,
+                    contract: c,
+                    tokenId: parsed.tokenId,
+                    timestamp: Math.floor(Date.now() / 1000),
+                    maker: parsed.maker,
+                    priceNative: parsed.priceNative,
+                    currency: 'ETH',
+                    marketplace: 'OpenSea',
+                    raw: { inferredCancellation: true, priorListingKey: k },
+                };
+                const del = this.delistDetector.ingest(synthetic, {
+                    minCancels: this.massDelistMinDefault,
+                });
+                if (del) {
+                    await markOpportunityHotContract(redisConnection, del.chain, del.contract).catch(() => {});
+                    await this.dispatchMassDelist(del, floorBefore);
+                }
+                inferred += 1;
+            }
+            if (inferred > 0) {
+                console.log(
+                    `[MarketIndexer] inferred ${inferred} cancellation(s) for ${c} (listing snapshot diff)`,
+                );
+            }
+        }
+
+        try {
+            await redisConnection.set(redisKey, JSON.stringify(nextKeys), 'EX', 86400);
+        } catch {
+            /* best-effort */
         }
     }
 
