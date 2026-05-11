@@ -20,3 +20,12 @@ export const walletActionBatchQueue = new Queue('wallet_action_batch', { connect
 /** Delayed floor before/after checks for mass listing / mass delist alerts. */
 export const floorImpactQueue = new Queue('floor_impact', { connection: redisConnection });
 
+/** Mint execution engine: primary job processing. */
+export const mintExecutionQueue = new Queue('mint_execution', { connection: redisConnection });
+
+/** Copy-mint / chain triggers → mint engine (optional worker bridge). */
+export const mintTriggersQueue = new Queue('mint_triggers', { connection: redisConnection });
+
+/** Optional: Discord or webhook notifications for mint job lifecycle. */
+export const mintNotificationsQueue = new Queue('mint_notifications', { connection: redisConnection });
+

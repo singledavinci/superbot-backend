@@ -1,0 +1,16 @@
+{
+  "name": "@superbot/mint-engine",
+  "version": "1.0.0",
+  "private": true,
+  "main": "../../../dist/apps/mint-engine/src/index.js",
+  "dependencies": {
+    "@superbot/analytics": "*",
+    "@superbot/database": "*",
+    "@superbot/queue": "*",
+    "axios": "^1.16.0",
+    "bullmq": "^5.76.5",
+    "dotenv": "^17.4.2",
+    "ethers": "^6.16.0",
+    "express": "^5.2.1"
+  }
+}

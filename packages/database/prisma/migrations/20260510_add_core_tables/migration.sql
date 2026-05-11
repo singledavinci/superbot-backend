@@ -34,7 +34,17 @@ CREATE TABLE IF NOT EXISTS "AlertChannel" (
     "createdAt"        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP,
     "updatedAt"        TIMESTAMP(3) NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
-CREATE UNIQUE INDEX IF NOT EXISTS "AlertChannel_discordChannelId_key" ON "AlertChannel" ("discordChannelId");
+-- Legacy unique on discordChannelId only; superseded by AlertChannel_guildId_alertType_key
+-- (migration 20260510000000). Skip if the newer index exists or duplicates would violate.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM pg_indexes
+        WHERE schemaname = 'public' AND indexname = 'AlertChannel_guildId_alertType_key'
+    ) THEN
+        CREATE UNIQUE INDEX IF NOT EXISTS "AlertChannel_discordChannelId_key" ON "AlertChannel" ("discordChannelId");
+    END IF;
+END $$;
 
 DO $$
 BEGIN

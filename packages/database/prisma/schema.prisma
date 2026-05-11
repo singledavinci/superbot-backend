@@ -20,6 +20,9 @@ model Guild {
   alertChannels   AlertChannel[]
   trackedWallets  TrackedWallet[]
   trackedCollections TrackedCollection[]
+  mintJobs                 MintJob[]
+  copyMintConfigs          CopyMintConfig[]
+  mintWalletAuthorizations MintWalletAuthorization[]
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 }
@@ -34,6 +37,10 @@ model User {
   gasBufferGwei       Float       @default(5.0)
   globalPremiumStatus Boolean     @default(false)
   watchlists          Watchlist[]
+  mintWallets          MintWallet[]
+  mintWalletAuthGrants MintWalletAuthorization[]
+  copyMintConfigsOwned CopyMintConfig[]
+  mintJobs             MintJob[]
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
 }
@@ -127,4 +134,244 @@ model AlertDeliveryLog {
 
   @@index([eventId])
   @@index([createdAt])
+}
+
+// --- Mint Execution Engine ---
+
+model MintWallet {
+  id                   String   @id @default(uuid())
+  userId               String
+  label                String?
+  chainId              Int
+  address              String   // normalized lowercase 0x…
+  signerType           String   // simulation-only | external-signer | vault-signer | local-dev-signer
+  signerReference      String?  // opaque ref to vault/HSM; never a raw key
+  isExecutionEnabled   Boolean  @default(false)
+  maxFeePerGas         String?
+  maxPriorityFeePerGas String?
+  maxTotalCostNative   String?
+  createdAt            DateTime @default(now())
+  updatedAt            DateTime @updatedAt
+  user                 User     @relation(fields: [userId], references: [id])
+  authorizations       MintWalletAuthorization[]
+  mintJobs             MintJob[]
+  copyMintConfigs      CopyMintConfig[]
+
+  @@index([userId, chainId])
+  @@index([address, chainId])
+}
+
+model MintWalletAuthorization {
+  id           String    @id @default(uuid())
+  guildId      String
+  userId       String
+  mintWalletId String
+  grantedBy    String?
+  grantedAt    DateTime  @default(now())
+  revokedAt    DateTime?
+  permissions  String[]  @default([]) // e.g. preflight, prepare, schedule, live
+  guild        Guild     @relation(fields: [guildId], references: [id])
+  user         User      @relation(fields: [userId], references: [id])
+  mintWallet   MintWallet @relation(fields: [mintWalletId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, userId, mintWalletId])
+}
+
+model CopyMintConfig {
+  id                       String   @id @default(uuid())
+  guildId                  String
+  userId                   String
+  trackedWalletAddress     String
+  targetCollectionAddress  String?
+  mode                     String   // confirmed_only | pending_if_visible
+  executionWalletId      String
+  quantity                 Int      @default(1)
+  maxFeePerGas             String?
+  maxPriorityFeePerGas     String?
+  maxTotalCostNative       String?
+  executionModeDefault     String   @default("simulation")
+  enabled                  Boolean  @default(false)
+  label                    String?
+  createdAt                DateTime @default(now())
+  updatedAt                DateTime @updatedAt
+  guild                    Guild    @relation(fields: [guildId], references: [id])
+  user                     User     @relation(fields: [userId], references: [id])
+  executionWallet          MintWallet @relation(fields: [executionWalletId], references: [id])
+
+  @@index([guildId, userId])
+}
+
+model MintJob {
+  id                   String    @id @default(uuid())
+  guildId              String
+  userId               String
+  walletId             String
+  chainId              Int
+  collectionAddress    String
+  mintContract         String
+  dropSource           String
+  dropType             String
+  triggerType          String
+  executionMode        String
+  status               String
+  quantity             Int       @default(1)
+  scheduledAt          DateTime?
+  startTime            DateTime?
+  maxFeePerGas         String?
+  maxPriorityFeePerGas String?
+  maxTotalCostNative   String?
+  txHash               String?
+  errorCode            String?
+  errorMessage         String?
+  planHash             String?
+  simulationStatus     String?
+  executionStartedAt   DateTime?
+  submittedAt          DateTime?
+  confirmedAt          DateTime?
+  metadataJson         Json?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  guild                Guild     @relation(fields: [guildId], references: [id])
+  user                 User      @relation(fields: [userId], references: [id])
+  wallet               MintWallet @relation(fields: [walletId], references: [id])
+  nonceLocks           NonceLock[]
+  transactions         MintTransaction[]
+  simulations          MintSimulation[]
+  auditLogs            MintAuditLog[]
+
+  @@index([guildId, status, scheduledAt])
+  @@index([planHash])
+  @@index([userId])
+}
+
+model MintDrop {
+  id                  String    @id @default(uuid())
+  chainId             Int
+  collectionAddress   String
+  mintContract        String
+  source              String
+  dropType            String
+  startTime           DateTime?
+  endTime             DateTime?
+  priceNative           String?
+  maxPerWallet        Int?
+  maxSupply           Int?
+  stageId             String?
+  merkleRoot          String?
+  requiresProof       Boolean   @default(false)
+  requiresSignature   Boolean   @default(false)
+  status              String    @default("unknown")
+  resolvedAt          DateTime?
+  metadataJson        Json?
+  createdAt           DateTime  @default(now())
+  updatedAt           DateTime  @updatedAt
+
+  @@index([chainId, mintContract])
+}
+
+model NonceLock {
+  id            String    @id @default(uuid())
+  chainId       Int
+  walletAddress String    // lowercase
+  nonce         String    // decimal string for bigint safety
+  status        String
+  mintJobId     String
+  lockedAt      DateTime  @default(now())
+  releasedAt    DateTime?
+  metadataJson  Json?
+  mintJob       MintJob   @relation(fields: [mintJobId], references: [id], onDelete: Cascade)
+
+  @@index([chainId, walletAddress])
+  @@index([mintJobId])
+}
+
+model MintTransaction {
+  id                    String    @id @default(uuid())
+  mintJobId             String
+  chainId               Int
+  walletAddress         String
+  nonce                 String
+  to                    String
+  value                 String
+  calldataHash          String
+  txHash                String?
+  status                String
+  providerResponsesJson Json?
+  gasStrategyJson       Json?
+  createdAt             DateTime  @default(now())
+  submittedAt           DateTime?
+  confirmedAt           DateTime?
+  metadataJson          Json?
+  mintJob               MintJob   @relation(fields: [mintJobId], references: [id], onDelete: Cascade)
+
+  @@index([mintJobId])
+  @@index([txHash])
+}
+
+model MintSimulation {
+  id          String   @id @default(uuid())
+  mintJobId   String
+  status      String
+  result      String?
+  gasEstimate String?
+  revertReason String?
+  checkedAt   DateTime @default(now())
+  metadataJson Json?
+  mintJob     MintJob  @relation(fields: [mintJobId], references: [id], onDelete: Cascade)
+
+  @@index([mintJobId])
+}
+
+model MintAuditLog {
+  id           String   @id @default(uuid())
+  mintJobId    String?
+  guildId      String?
+  userId       String?
+  action         String
+  status         String?
+  message        String?
+  metadataJson Json?
+  createdAt    DateTime @default(now())
+  mintJob      MintJob? @relation(fields: [mintJobId], references: [id], onDelete: SetNull)
+
+  @@index([mintJobId])
+  @@index([guildId, createdAt])
+}
+
+model TrackedMintTrigger {
+  id               String   @id @default(uuid())
+  chainId          Int
+  trackedWallet    String
+  collectionAddress String
+  txHash           String
+  triggerSource    String
+  detectedAt       DateTime @default(now())
+  usedForMint      Boolean  @default(false)
+  metadataJson     Json?
+
+  @@index([trackedWallet, chainId])
+  @@index([txHash])
+}
+
+model MintProviderHealth {
+  id            String    @id @default(uuid())
+  providerName  String
+  providerType  String
+  chainId       Int
+  status        String
+  latencyMs     Int?
+  errorCount    Int       @default(0)
+  lastSuccessAt DateTime?
+  lastFailureAt DateTime?
+  metadataJson  Json?
+  updatedAt     DateTime  @updatedAt
+
+  @@unique([providerName, chainId])
+}
+
+model MintMainnetReadiness {
+  id                 String    @id @default("default")
+  checklistJson      Json      @default("{}")
+  testnetVerifiedAt  DateTime?
+  updatedAt          DateTime  @updatedAt
 }

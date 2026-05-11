@@ -3,6 +3,7 @@ import {
     redisConnection,
     discordQueue as discordDeliveryQueue,
     walletActionBatchQueue,
+    mintTriggersQueue,
 } from '@superbot/queue';
 import { prisma } from '@superbot/database';
 import {
@@ -876,6 +877,30 @@ export class EventWorker {
                         : eventType === 'MINT'
                           ? 'WHALE_MINT'
                           : 'WHALE_BUY';
+
+                if (
+                    whaleAlertType === 'WHALE_MINT' &&
+                    process.env.MINT_COPY_CONFIRMED_ENABLED === 'true' &&
+                    chainLc === 'ethereum'
+                ) {
+                    const jid = `minttrig_${txHash}_${wallet.id}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
+                    void mintTriggersQueue
+                        .add(
+                            'COPY_CONFIRMED_MINT',
+                            {
+                                guildDiscordId: guild.discordId,
+                                trackedWallet: wallet.address.toLowerCase(),
+                                collectionAddress: contract.toLowerCase(),
+                                chainId: 1,
+                                txHash,
+                            },
+                            { jobId: jid, removeOnComplete: { count: 500 } },
+                        )
+                        .catch((err: unknown) =>
+                            console.warn('[Worker] mintTriggersQueue enqueue failed:', err),
+                        );
+                }
+
                 const defaultWhaleChannelId = discordChannelForTypes(guild.alertChannels, [
                     whaleAlertType,
                     ...(whaleAlertType === 'WHALE_SALE'

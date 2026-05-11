@@ -1,0 +1,10 @@
+{
+  "name": "@superbot/mint-executor-bot",
+  "version": "1.0.0",
+  "private": true,
+  "main": "../../../dist/apps/mint-executor-bot/src/index.js",
+  "dependencies": {
+    "discord.js": "^14.26.4",
+    "dotenv": "^17.4.2"
+  }
+}

@@ -768,9 +768,12 @@ export class SuperBot {
             return;
         }
 
-        const commandFiles = fs.readdirSync(commandsPath).filter(file => 
-            (file.endsWith('.ts') || file.endsWith('.js')) && !file.endsWith('.d.ts')
-        );
+        const execMintInIntel = process.env.MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS === 'true';
+        const commandFiles = fs.readdirSync(commandsPath).filter(file => {
+            if (!(file.endsWith('.ts') || file.endsWith('.js')) || file.endsWith('.d.ts')) return false;
+            if (file.startsWith('mint-') && !execMintInIntel) return false;
+            return true;
+        });
         console.log(`[Debug] Found ${commandFiles.length} potential command files.`);
 
         const restCommands = [];

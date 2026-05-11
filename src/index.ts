@@ -69,6 +69,15 @@ async function start() {
                 const floorWorker = new FloorWorker();
                 await floorWorker.start();
                 break;
+            case 'mint-engine':
+                console.log('⛏️ Loading Mint Execution Engine...');
+                const { startMintEngineHttp } = await import('../apps/mint-engine/src/server');
+                await startMintEngineHttp();
+                break;
+            case 'mint-executor-bot':
+                console.log('🤖 Loading Mint Executor Discord Bot...');
+                await import('../apps/mint-executor-bot/src/index');
+                break;
             default:
                 console.log('⚡ No SERVICE_TYPE specified. Running in MONOLITH mode (All services in one process)...');
                 const [BotMod, ApiMod, IndexerMod, WorkerMod] = await Promise.all([

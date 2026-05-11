@@ -1,0 +1,72 @@
+import * as dotenv from 'dotenv';
+
+dotenv.config();
+
+function bool(raw: string | undefined, defaultVal: boolean): boolean {
+    if (raw === undefined || raw === '') return defaultVal;
+    return raw === 'true' || raw === '1';
+}
+
+function num(raw: string | undefined, defaultVal: number): number {
+    const n = Number(raw);
+    return Number.isFinite(n) ? n : defaultVal;
+}
+
+/** Central mint engine configuration (safe defaults). */
+export const mintEnv = {
+    MINT_EXECUTION_ENABLED: bool(process.env.MINT_EXECUTION_ENABLED, false),
+    MINT_MAINNET_BROADCAST_ENABLED: bool(process.env.MINT_MAINNET_BROADCAST_ENABLED, false),
+    MINT_ENGINE_MODE: (process.env.MINT_ENGINE_MODE || 'simulation').toLowerCase(),
+    MINT_REQUIRE_SECURE_SIGNER: bool(process.env.MINT_REQUIRE_SECURE_SIGNER, true),
+    MINT_DEFAULT_CHAIN_ID: num(process.env.MINT_DEFAULT_CHAIN_ID, 1),
+    MINT_TESTNET_ONLY: bool(process.env.MINT_TESTNET_ONLY, true),
+    MINT_EMERGENCY_STOP: bool(process.env.MINT_EMERGENCY_STOP, false),
+    MINT_CONFIRMATION_BLOCKS: num(process.env.MINT_CONFIRMATION_BLOCKS, 1),
+    MINT_MAX_CONCURRENT_JOBS: num(process.env.MINT_MAX_CONCURRENT_JOBS, 10),
+    MINT_MAX_CONCURRENT_PER_WALLET: num(process.env.MINT_MAX_CONCURRENT_PER_WALLET, 1),
+    MINT_MAX_RPC_BROADCASTS: num(process.env.MINT_MAX_RPC_BROADCASTS, 3),
+    MINT_SCHEDULE_DRIFT_WARN_MS: num(process.env.MINT_SCHEDULE_DRIFT_WARN_MS, 100),
+    MINT_SIMULATION_TIMEOUT_MS: num(process.env.MINT_SIMULATION_TIMEOUT_MS, 750),
+    MINT_BROADCAST_TIMEOUT_MS: num(process.env.MINT_BROADCAST_TIMEOUT_MS, 500),
+    MINT_PROVIDER_FAILOVER_MS: num(process.env.MINT_PROVIDER_FAILOVER_MS, 500),
+    MINT_GAS_REFRESH_MS: num(process.env.MINT_GAS_REFRESH_MS, 250),
+    MINT_MAX_PRIORITY_FEE_GWEI: process.env.MINT_MAX_PRIORITY_FEE_GWEI || '',
+    MINT_MAX_FEE_GWEI: process.env.MINT_MAX_FEE_GWEI || '',
+    MINT_MAX_TOTAL_COST_NATIVE: process.env.MINT_MAX_TOTAL_COST_NATIVE || '',
+    MINT_ALLOW_PRIVATE_RELAY: bool(process.env.MINT_ALLOW_PRIVATE_RELAY, false),
+    MINT_PRIVATE_RELAY_URL: process.env.MINT_PRIVATE_RELAY_URL || '',
+    MINT_MEMPOOL_WATCH_ENABLED: bool(process.env.MINT_MEMPOOL_WATCH_ENABLED, true),
+    MINT_COPY_PENDING_ENABLED: bool(process.env.MINT_COPY_PENDING_ENABLED, false),
+    MINT_COPY_CONFIRMED_ENABLED: bool(process.env.MINT_COPY_CONFIRMED_ENABLED, false),
+    MINT_OPENSEA_SEADROP_ENABLED: bool(process.env.MINT_OPENSEA_SEADROP_ENABLED, true),
+    MINT_OPENSEA_FCFS_ENABLED: bool(process.env.MINT_OPENSEA_FCFS_ENABLED, true),
+    MINT_OPENSEA_GTD_ENABLED: bool(process.env.MINT_OPENSEA_GTD_ENABLED, true),
+    MINT_AUDIT_LOG_RETENTION_DAYS: num(process.env.MINT_AUDIT_LOG_RETENTION_DAYS, 90),
+    MINT_REPLACEMENT_ENABLED: bool(process.env.MINT_REPLACEMENT_ENABLED, true),
+    MINT_MAX_REPLACEMENT_ATTEMPTS: num(process.env.MINT_MAX_REPLACEMENT_ATTEMPTS, 2),
+    MINT_REPLACEMENT_BUMP_PERCENT: num(process.env.MINT_REPLACEMENT_BUMP_PERCENT, 15),
+    MINT_CLOCK_DRIFT_CHECK_ENABLED: bool(process.env.MINT_CLOCK_DRIFT_CHECK_ENABLED, true),
+    MINT_BACKTEST_MODE: bool(process.env.MINT_BACKTEST_MODE, false),
+    MINT_HOT_PATH_METRICS_ENABLED: bool(process.env.MINT_HOT_PATH_METRICS_ENABLED, true),
+    MINT_PRIVATE_KEY_INPUT_ALLOWED: bool(process.env.MINT_PRIVATE_KEY_INPUT_ALLOWED, false),
+    MINT_DISCORD_EXECUTION_BOT_ENABLED: bool(process.env.MINT_DISCORD_EXECUTION_BOT_ENABLED, true),
+    MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS: bool(process.env.MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS, false),
+
+    MINT_ENGINE_SERVICE_SECRET: process.env.MINT_ENGINE_SERVICE_SECRET || '',
+    MINT_API_NONCE_REDIS_TTL_SEC: num(process.env.MINT_API_NONCE_REDIS_TTL_SEC, 180),
+    MINT_API_MAX_CLOCK_SKEW_SEC: num(process.env.MINT_API_MAX_CLOCK_SKEW_SEC, 60),
+
+    /** Prefer `PORT` (Railway/Heroku) over `MINT_ENGINE_PORT` for HTTP bind. */
+    MINT_ENGINE_PORT: num(process.env.PORT || process.env.MINT_ENGINE_PORT, 3847),
+    OPENSEA_API_KEY: process.env.OPENSEA_API_KEY || '',
+
+    MINT_TESTNET_LIVE_VERIFIED_AT: process.env.MINT_TESTNET_LIVE_VERIFIED_AT || '',
+};
+
+export function isLiveEngineMode(): boolean {
+    return mintEnv.MINT_ENGINE_MODE === 'live';
+}
+
+export function isPrepareEngineMode(): boolean {
+    return mintEnv.MINT_ENGINE_MODE === 'prepare';
+}
