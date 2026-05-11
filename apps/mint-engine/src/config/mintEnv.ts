@@ -60,6 +60,9 @@ export const mintEnv = {
     MINT_ENGINE_PORT: num(process.env.PORT || process.env.MINT_ENGINE_PORT, 3847),
     OPENSEA_API_KEY: process.env.OPENSEA_API_KEY || '',
 
+    /** Optional `0x` + 40 hex: overrides default OpenSea CREATE2 SeaDrop minter for `seaDrop()`-less NFT resolution. */
+    MINT_SEADROP_CANONICAL: (process.env.MINT_SEADROP_CANONICAL || '').replace(/^\uFEFF/, '').trim(),
+
     MINT_TESTNET_LIVE_VERIFIED_AT: process.env.MINT_TESTNET_LIVE_VERIFIED_AT || '',
 };
 

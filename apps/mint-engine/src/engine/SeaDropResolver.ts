@@ -10,18 +10,39 @@ const CHAIN_SLUG: Record<number, string> = {
     5: 'goerli',
 };
 
+/** OpenSea SeaDrop minter at cross-chain CREATE2 address (mainnet + Sepolia, and other deployed networks). */
+const DEFAULT_CANONICAL_SEA_DROP = '0x00005ea00ac477b1030ce78506496e8c2de24bf5';
+
+function parseOptionalAddress(raw: string): string | null {
+    const s = raw.trim().toLowerCase();
+    if (!s || !/^0x[a-f0-9]{40}$/.test(s)) return null;
+    return s;
+}
+
+/** Default CREATE2 minter on chains where OpenSea publishes this address; else only env override. */
+function canonicalSeaDropForChain(chainId: number): string | null {
+    const fromEnv = parseOptionalAddress(mintEnv.MINT_SEADROP_CANONICAL);
+    if (fromEnv) return fromEnv;
+    if (chainId === 1 || chainId === 11155111) return DEFAULT_CANONICAL_SEA_DROP;
+    return null;
+}
+
 const ZERO_HASH = '0x' + '00'.repeat(32);
 
 function nowSec(): number {
     return Math.floor(Date.now() / 1000);
 }
 
+function isUnsetPublicDrop(pd: { mintPrice: bigint; startTime: bigint; endTime: bigint; maxTotalMintableByWallet: bigint }): boolean {
+    return pd.mintPrice === 0n && pd.startTime === 0n && pd.endTime === 0n && pd.maxTotalMintableByWallet === 0n;
+}
+
 /**
  * Resolves SeaDrop / OpenSea mint stages using:
  * - OpenSea **official** HTTP API (contract metadata only), and
- * - On-chain `seaDrop()` + `getPublicDrop` / `getAllowListMerkleRoot` reads via HTTPS RPC.
+ * - On-chain `seaDrop()` when present, else **default OpenSea CREATE2 SeaDrop** (mainnet + Sepolia) or **`MINT_SEADROP_CANONICAL`** when `getPublicDrop(nft)` is configured there, plus `getAllowListMerkleRoot` reads via HTTPS RPC.
  *
- * Fails closed on unknown price/function, allowlist/signature requirements, or missing RPC/API.
+ * Fails closed on unknown price/function, allowlist requirements, or missing RPC/API.
  */
 export class SeaDropResolver {
     async resolve(args: {
@@ -64,18 +85,39 @@ export class SeaDropResolver {
 
         const provider = new JsonRpcProvider(args.rpcUrl);
         const nftC = new Contract(nft, NFT_SEA_DROP_IFACE, provider);
-        let seaDropAddr: string;
+        let seaDropAddr: string | null = null;
         try {
-            seaDropAddr = (await nftC.seaDrop.staticCall()) as string;
+            const fromNft = (await nftC.seaDrop.staticCall()) as string;
+            if (fromNft && fromNft.toLowerCase() !== ZeroAddress.toLowerCase()) {
+                seaDropAddr = fromNft;
+            }
         } catch {
+            /* ERC721SeaDrop clones often omit seaDrop(); try canonical minter below. */
+        }
+
+        const canon = canonicalSeaDropForChain(args.chainId);
+        if (!seaDropAddr && canon) {
+            const sdCanon = new Contract(canon, SEA_DROP_IFACE, provider);
+            try {
+                const raw = await sdCanon.getPublicDrop.staticCall(nft);
+                const pdProbe = decodePublicDrop(raw);
+                if (pdProbe && !isUnsetPublicDrop(pdProbe)) {
+                    seaDropAddr = canon;
+                }
+            } catch {
+                /* no configured public drop on canonical SeaDrop */
+            }
+        }
+
+        if (!seaDropAddr) {
+            const triedCanonResolver = canon !== null;
             return {
                 ok: false,
                 code: 'FAIL_UNKNOWN_FUNCTION',
-                message: 'NFT does not expose seaDrop(); not a supported SeaDrop-style collection',
+                message: triedCanonResolver
+                    ? 'NFT has no seaDrop() and canonical SeaDrop has no configured public drop for this contract'
+                    : 'NFT does not expose seaDrop(); set MINT_SEADROP_CANONICAL to the chain minter or use a token that implements seaDrop()',
             };
-        }
-        if (!seaDropAddr || seaDropAddr.toLowerCase() === ZeroAddress.toLowerCase()) {
-            return { ok: false, code: 'FAIL_UNKNOWN_FUNCTION', message: 'seaDrop() returned zero address' };
         }
 
         const sd = new Contract(seaDropAddr, SEA_DROP_IFACE, provider);
@@ -94,21 +136,7 @@ export class SeaDropResolver {
             };
         }
 
-        try {
-            const signers = (await sd.getSigners.staticCall(nft)) as string[];
-            if (
-                Array.isArray(signers) &&
-                signers.some(s => typeof s === 'string' && s.toLowerCase() !== ZeroAddress.toLowerCase())
-            ) {
-                return {
-                    ok: false,
-                    code: 'FAIL_MISSING_PROOF',
-                    message: 'Server-signed mint path is configured; not supported in prepare-only beta',
-                };
-            }
-        } catch {
-            /* getSigners optional on older deployments */
-        }
+        /* getSigners may be set for optional signed-mint paths; mintPublic does not use it. */
 
         let publicDropRaw: unknown;
         try {
@@ -127,7 +155,7 @@ export class SeaDropResolver {
             return { ok: false, code: 'FAIL_UNKNOWN_PRICE', message: 'Could not decode getPublicDrop tuple' };
         }
 
-        if (pd.mintPrice === 0n && pd.startTime === 0n && pd.endTime === 0n && pd.maxTotalMintableByWallet === 0n) {
+        if (isUnsetPublicDrop(pd)) {
             return { ok: false, code: 'FAIL_UNKNOWN_PRICE', message: 'Public drop fields are unset on-chain' };
         }
 
