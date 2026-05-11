@@ -1,7 +1,14 @@
 import { createHash, createHmac, randomBytes, timingSafeEqual } from 'crypto';
 import type { Request, Response, NextFunction } from 'express';
 
+/** Path string that must match the client HMAC `path` line (full path from app root). */
 export function requestPathForSigning(req: Request): string {
+    const base = req.baseUrl || '';
+    const p = req.path || '';
+    if (base || p) {
+        const joined = `${base}${p.startsWith('/') ? p : `/${p}`}`;
+        return joined || '/';
+    }
     try {
         const u = new URL(req.originalUrl || req.url || '/', 'http://local');
         return u.pathname;

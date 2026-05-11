@@ -29,7 +29,7 @@ export async function mintEnginePost(path: string, jsonBody: Record<string, unkn
     const base = (process.env.MINT_ENGINE_URL || 'http://127.0.0.1:3847').replace(/\/+$/, '');
     const fullPath = `/v1/mint${path}`;
     const url = `${base}${fullPath}`;
-    const secret = process.env.MINT_ENGINE_SERVICE_SECRET || '';
+    const secret = (process.env.MINT_ENGINE_SERVICE_SECRET || '').replace(/^\uFEFF/, '').trim();
     if (!secret) throw new Error('MINT_ENGINE_SERVICE_SECRET is not set');
     const ts = Math.floor(Date.now() / 1000);
     const nonce = randomBytes(16).toString('hex');

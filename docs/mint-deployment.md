@@ -123,7 +123,7 @@ Do **not** use `--skip-job` for the final “prepare-only beta” proof. See `do
 | Symptom | Check |
 |---------|--------|
 | SSL errors to Postgres from laptop | Use Railway **public** TCP proxy URL or run migrate from Railway/network that trusts the endpoint. |
-| HMAC 401/403 | Clock skew, wrong secret, body rewrite; compare `MINT_ENGINE_SERVICE_SECRET` on engine vs client. |
+| HMAC 401/403 / `BAD_SIGNATURE` | Same `MINT_ENGINE_SERVICE_SECRET` on engine, executor, and local `.env` (trim whitespace/BOM). Redeploy mint-engine after auth fixes. Path signed must be full `/v1/mint/...` (engine uses `baseUrl + path`). |
 | Redis connection | `REDIS_URL` must be reachable from the service (internal vs public proxy). |
 | `npm ci` fails on Railway | `package-lock.json` out of sync with workspaces — run `npm install`, commit lockfile. |
 | Executor bot exits immediately | **`MINT_EXECUTOR_DISCORD_TOKEN`** missing or invalid. |
