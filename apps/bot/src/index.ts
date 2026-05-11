@@ -235,7 +235,7 @@ export class SuperBot {
             }
         }, {
             connection: redisConnection,
-            concurrency: 2 // Discord rate limits are strict, keep concurrency low
+            concurrency: 4 // Parallel channel sends; stay well under global Discord limits
         });
     }
 

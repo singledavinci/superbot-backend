@@ -860,11 +860,17 @@ export class EventWorker {
             }
         }
 
+        const guildRowsForWhaleAlerts =
+            uniqueGuildIds.size > 0
+                ? await prisma.guild.findMany({
+                      where: { id: { in: [...uniqueGuildIds] } },
+                      include: { alertChannels: true },
+                  })
+                : [];
+        const guildByIdForWhaleAlerts = new Map(guildRowsForWhaleAlerts.map(g => [g.id, g]));
+
         for (const gid of uniqueGuildIds) {
-            const guild = await prisma.guild.findUnique({
-                where: { id: gid },
-                include: { alertChannels: true },
-            });
+            const guild = guildByIdForWhaleAlerts.get(gid);
 
             if (!guild) continue;
 
