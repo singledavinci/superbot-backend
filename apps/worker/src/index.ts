@@ -82,7 +82,11 @@ function shortEthAddr(addr: string): string {
     return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-type AlertChannelRouting = { alertType: string; discordChannelId: string };
+type AlertChannelRouting = {
+    alertType: string;
+    discordChannelId: string;
+    mentionRoleId: string | null;
+};
 
 /** First matching alert-type row wins; used so dashboard can add dedicated routes per type. */
 function discordChannelForTypes(
@@ -92,6 +96,19 @@ function discordChannelForTypes(
     for (const t of preferenceOrder) {
         const row = channels.find(c => c.alertType === t);
         if (row?.discordChannelId) return row.discordChannelId;
+    }
+    return null;
+}
+
+/** Guild route ping role: first preference order hit with a non-empty mentionRoleId wins. */
+function mentionRoleForTypes(
+    channels: { alertType: string; mentionRoleId: string | null }[],
+    preferenceOrder: string[],
+): string | null {
+    for (const t of preferenceOrder) {
+        const row = channels.find(c => c.alertType === t);
+        const id = row?.mentionRoleId;
+        if (typeof id === 'string' && id.trim()) return id.trim();
     }
     return null;
 }
@@ -471,6 +488,7 @@ export class EventWorker {
         contract: string;
         chain: string;
         floorBefore: number | null;
+        mentionRoleId?: string | null;
     }) {
         const originalEventId = String(data.originalEventId || '');
         const channelId = String(data.channelId || '');
@@ -539,6 +557,10 @@ export class EventWorker {
                 pctChange,
                 contextualExplanation: cxImpact,
                 aiNarrative: impactNarrative ?? undefined,
+                mentionRoleId:
+                    typeof data.mentionRoleId === 'string' && data.mentionRoleId.trim()
+                        ? data.mentionRoleId.trim()
+                        : null,
             },
             {
                 jobId: `floor-followup-discord:${originalEventId}:${channelId}`,
@@ -902,6 +924,11 @@ export class EventWorker {
                     { collectionName: whaleCollectionLabel },
                 );
 
+                const whaleRouteMention = mentionRoleForTypes(guild.alertChannels, [
+                    whaleAlertType,
+                    'WHALE_BUY',
+                    'WHALE_SALE',
+                ]);
                 const whaleDiscordPayload: Record<string, unknown> = {
                     eventId,
                     channelId,
@@ -919,7 +946,7 @@ export class EventWorker {
                     currency,
                     marketplace,
                     intelligence,
-                    mentionRoleId: wallet.mentionRoleId,
+                    mentionRoleId: wallet.mentionRoleId ?? whaleRouteMention,
                     possibleWashTrading: possibleWashTrading || undefined,
                     nftMeta,
                     walletProfile: focusProfile,
@@ -1084,7 +1111,9 @@ export class EventWorker {
                 triggerTxHash: det.triggerTxHash,
                 triggerBuyer: det.triggerBuyer,
                 triggerProfile,
-                mentionRoleId: row?.mentionRoleId ?? null,
+                mentionRoleId:
+                    row?.mentionRoleId ??
+                    mentionRoleForTypes(guild.alertChannels, ['CLUSTER_BUY', 'WHALE_BUY']),
                 contextualExplanation: cxCluster,
                 aiNarrative: clusterNar ?? undefined,
             },
@@ -1100,6 +1129,7 @@ export class EventWorker {
         sweep: SweepDetection,
         collections: {
             id: string;
+            guildId: string;
             alertChannelId: string | null;
             mentionRoleId: string | null;
             name: string;
@@ -1107,6 +1137,12 @@ export class EventWorker {
         }[],
     ) {
         const envMinTotal = Number(process.env.SWEEP_MIN_TOTAL_NATIVE) || 0.5;
+        const guildIds = [...new Set(collections.map(c => c.guildId))];
+        const guildsSweep = await prisma.guild.findMany({
+            where: { id: { in: guildIds } },
+            include: { alertChannels: true },
+        });
+        const guildByIdSweep = new Map(guildsSweep.map(g => [g.id, g]));
 
         // Enrich at most the first three swept tokens (most informative for the
         // embed thumbnail strip without ballooning external request volume) and
@@ -1156,6 +1192,11 @@ export class EventWorker {
                 jobCacheKey: `sweep-${row.id}-${sweep.eventId}`,
             });
 
+            const gSweep = guildByIdSweep.get(row.guildId);
+            const sweepRouteMention = mentionRoleForTypes(gSweep?.alertChannels ?? [], [
+                'SWEEP',
+                'WHALE_BUY',
+            ]);
             await discordDeliveryQueue.add(
                 'discord_alert',
                 {
@@ -1175,7 +1216,7 @@ export class EventWorker {
                     tokenIds: sweep.tokenIds,
                     sampleNftMetas: sampleMetas.filter((m): m is NFTMetadata => m !== null),
                     sampleNftNames,
-                    mentionRoleId: row.mentionRoleId,
+                    mentionRoleId: row.mentionRoleId ?? sweepRouteMention,
                     contextualExplanation: cxSweep,
                     aiNarrative: sweepNar ?? undefined,
                 },
@@ -1339,7 +1380,13 @@ export class EventWorker {
                     floorEth,
                     blockRange,
                     topMinerLines,
-                    mentionRoleId: row.mentionRoleId,
+                    mentionRoleId:
+                        row.mentionRoleId ??
+                        mentionRoleForTypes(guild?.alertChannels ?? [], [
+                            'HOT_MINT',
+                            'MINT_RADAR',
+                            'WHALE_BUY',
+                        ]),
                     contextualExplanation: cxHot,
                     aiNarrative: hotNar ?? undefined,
                 },
@@ -1387,6 +1434,7 @@ export class EventWorker {
                     timeWindowMin: 5,
                     collectionName: mintRadarCollectionName,
                     collectionMeta,
+                    mentionRoleId: ch.mentionRoleId,
                 }, {
                     jobId: `mint-alert-${chain}-${contract}-${bucket}`
                 });

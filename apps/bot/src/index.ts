@@ -631,6 +631,7 @@ export class SuperBot {
         pctChange: number | null;
         contextualExplanation?: ContextualExplanation | null;
         aiNarrative?: string;
+        mentionRoleId?: string | null;
     }) {
         const deliveryKey = data.deliveryKey;
         const eventId = data.eventId;
@@ -676,9 +677,16 @@ export class SuperBot {
             });
 
             const orig = await channel.messages.fetch(data.replyToMessageId);
+            const replyCh =
+                orig.channel && orig.channel.isTextBased() ? (orig.channel as TextChannel) : null;
+            const validatedFollowRole = await resolvePingableRoleId(replyCh, data.mentionRoleId);
+            const followContent = validatedFollowRole ? `<@&${validatedFollowRole}>` : undefined;
             await orig.reply({
+                ...(followContent ? { content: followContent } : {}),
                 embeds: [embed],
-                allowedMentions: { parse: [] },
+                allowedMentions: validatedFollowRole
+                    ? { roles: [validatedFollowRole] }
+                    : { parse: [] },
             });
 
             await this.recordDelivery(deliveryKey, eventId, channelId, alertType, 'delivered');
@@ -769,6 +777,82 @@ export class SuperBot {
                     }
                 }
             } else if (interaction.isButton()) {
+                if (interaction.customId.startsWith('togglerole:')) {
+                    const roleId = interaction.customId.slice('togglerole:'.length).trim();
+                    if (!/^\d{17,22}$/.test(roleId)) {
+                        await interaction.reply({ content: 'Invalid role control.', ephemeral: true });
+                        return;
+                    }
+                    if (!interaction.inGuild() || !interaction.guild || !interaction.guildId) {
+                        await interaction.reply({ content: 'Use this inside a server.', ephemeral: true });
+                        return;
+                    }
+                    try {
+                        const [member, role] = await Promise.all([
+                            interaction.guild.members.fetch(interaction.user.id),
+                            interaction.guild.roles.fetch(roleId),
+                        ]);
+                        if (!role) {
+                            await interaction.reply({
+                                content: 'That role no longer exists.',
+                                ephemeral: true,
+                            });
+                            return;
+                        }
+                        const guildRow = await prisma.guild.findUnique({
+                            where: { discordId: interaction.guildId },
+                            select: {
+                                alertChannels: {
+                                    where: { mentionRoleId: roleId },
+                                    select: { discordChannelId: true },
+                                    take: 1,
+                                },
+                            },
+                        });
+                        const pingCh = guildRow?.alertChannels[0]?.discordChannelId;
+                        const chFrag = pingCh ? `<#${pingCh}>` : 'the alert channel';
+                        const had = member.roles.cache.has(roleId);
+                        if (had) {
+                            await member.roles.remove(roleId);
+                            await interaction.reply({
+                                content: `Removed **${role.name}** — you won't be pinged for these anymore.`,
+                                ephemeral: true,
+                            });
+                        } else {
+                            await member.roles.add(roleId);
+                            await interaction.reply({
+                                content: `Added **${role.name}** — you'll be pinged in ${chFrag} when alerts fire.`,
+                                ephemeral: true,
+                            });
+                        }
+                    } catch (error: unknown) {
+                        const code =
+                            typeof error === 'object' &&
+                            error !== null &&
+                            'code' in error &&
+                            typeof (error as { code: unknown }).code === 'number'
+                                ? (error as { code: number }).code
+                                : undefined;
+                        if (code === 50013) {
+                            await interaction.reply({
+                                content:
+                                    'I could not change your roles. The bot needs **Manage Roles**, and the alert role must be **below** SuperBot\'s top role in Server Settings → Roles.',
+                                ephemeral: true,
+                            });
+                            return;
+                        }
+                        console.error('[Bot] togglerole interaction failed:', error);
+                        const msg =
+                            error instanceof Error ? error.message : 'Something went wrong. Try again later.';
+                        if (interaction.replied || interaction.deferred) {
+                            await interaction.followUp({ content: msg, ephemeral: true });
+                        } else {
+                            await interaction.reply({ content: msg, ephemeral: true });
+                        }
+                    }
+                    return;
+                }
+
                 // Handle interactive buttons from alerts
                 const [action, target] = interaction.customId.split('_');
 

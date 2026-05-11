@@ -25,6 +25,17 @@ interface SnapshotPayload {
     ts: number;
 }
 
+function floorRouteMention(
+    channels: { alertType: string; mentionRoleId: string | null }[],
+): string | null {
+    for (const t of ['FLOOR_DROP', 'FLOOR_RISE']) {
+        const row = channels.find(c => c.alertType === t);
+        const id = row?.mentionRoleId;
+        if (typeof id === 'string' && id.trim()) return id.trim();
+    }
+    return null;
+}
+
 export class FloorWorker {
     private floorProvider = new FloorProvider();
     private nftMetadata = new NFTMetadataClient({ redis: redisConnection });
@@ -63,6 +74,12 @@ export class FloorWorker {
         console.log(`[FloorWorker] Checking ${tracked.length} collections for floor movement...`);
 
         const hourBucket = Math.floor(Date.now() / 3600000);
+        const guildIds = [...new Set(tracked.map(t => t.guildId))];
+        const guildsFloor = await prisma.guild.findMany({
+            where: { id: { in: guildIds } },
+            include: { alertChannels: true },
+        });
+        const guildByIdFloor = new Map(guildsFloor.map(g => [g.id, g]));
 
         for (const item of tracked) {
             try {
@@ -128,6 +145,9 @@ export class FloorWorker {
                         const { name: floorDropCollName } = await this.collectionNames.resolve(contract, {
                             trackedName: item.name,
                         });
+                        const gFloor = guildByIdFloor.get(item.guildId);
+                        const dropPing =
+                            item.mentionRoleId ?? floorRouteMention(gFloor?.alertChannels ?? []);
                         await discordDeliveryQueue.add(
                             'discord_alert',
                             {
@@ -140,7 +160,7 @@ export class FloorWorker {
                                 prevFloor: prev.priceNative,
                                 pctChange: dropPct,
                                 currency: current.currency,
-                                mentionRoleId: item.mentionRoleId,
+                                mentionRoleId: dropPing,
                                 contextualExplanation: cxDrop,
                                 aiNarrative: narrDrop ?? undefined,
                             },
@@ -173,6 +193,9 @@ export class FloorWorker {
                         const { name: floorRiseCollName } = await this.collectionNames.resolve(contract, {
                             trackedName: item.name,
                         });
+                        const gRise = guildByIdFloor.get(item.guildId);
+                        const risePing =
+                            item.mentionRoleId ?? floorRouteMention(gRise?.alertChannels ?? []);
                         await discordDeliveryQueue.add(
                             'discord_alert',
                             {
@@ -185,7 +208,7 @@ export class FloorWorker {
                                 prevFloor: prev.priceNative,
                                 pctChange: risePct,
                                 currency: current.currency,
-                                mentionRoleId: item.mentionRoleId,
+                                mentionRoleId: risePing,
                                 contextualExplanation: cxRise,
                                 aiNarrative: narrRise ?? undefined,
                             },

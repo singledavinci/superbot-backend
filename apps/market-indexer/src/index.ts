@@ -108,6 +108,7 @@ export class MarketIndexer {
         contract: string;
         chain: string;
         floorBefore: number | null;
+        mentionRoleId: string | null;
     }) {
         try {
             await floorImpactQueue.add(
@@ -119,6 +120,7 @@ export class MarketIndexer {
                     contract: args.contract,
                     chain: args.chain,
                     floorBefore: args.floorBefore,
+                    mentionRoleId: args.mentionRoleId,
                     scheduledAt: Date.now(),
                     dueAt: Date.now() + FLOOR_IMPACT_DELAY_MS,
                 },
@@ -298,6 +300,21 @@ export class MarketIndexer {
                 { trackedName: row.name },
             );
 
+            const impactRoute = await prisma.alertChannel.findUnique({
+                where: {
+                    guildId_alertType: { guildId: row.guildId, alertType: 'FLOOR_IMPACT_FOLLOWUP' },
+                },
+                select: { mentionRoleId: true },
+            });
+            const listingRoute = await prisma.alertChannel.findUnique({
+                where: {
+                    guildId_alertType: { guildId: row.guildId, alertType: 'MASS_LISTING' },
+                },
+                select: { mentionRoleId: true },
+            });
+            const listingPing =
+                row.mentionRoleId ?? listingRoute?.mentionRoleId ?? null;
+
             await discordQueue.add(
                 'discord_alert',
                 {
@@ -310,7 +327,7 @@ export class MarketIndexer {
                     collectionMeta,
                     listingCount: det.count,
                     windowMs: det.windowMs,
-                    mentionRoleId: row.mentionRoleId,
+                    mentionRoleId: listingPing,
                     floorBeforeEth: floorBefore,
                     floorImpactPending: true,
                     contextualExplanation: cxMass,
@@ -330,6 +347,7 @@ export class MarketIndexer {
                 contract: det.contract,
                 chain: det.chain,
                 floorBefore,
+                mentionRoleId: impactRoute?.mentionRoleId ?? null,
             });
         }
     }
@@ -382,6 +400,20 @@ export class MarketIndexer {
                 { trackedName: row.name },
             );
 
+            const impactRouteDel = await prisma.alertChannel.findUnique({
+                where: {
+                    guildId_alertType: { guildId: row.guildId, alertType: 'FLOOR_IMPACT_FOLLOWUP' },
+                },
+                select: { mentionRoleId: true },
+            });
+            const delistRoute = await prisma.alertChannel.findUnique({
+                where: {
+                    guildId_alertType: { guildId: row.guildId, alertType: 'MASS_DELIST' },
+                },
+                select: { mentionRoleId: true },
+            });
+            const delistPing = row.mentionRoleId ?? delistRoute?.mentionRoleId ?? null;
+
             await discordQueue.add(
                 'discord_alert',
                 {
@@ -395,7 +427,7 @@ export class MarketIndexer {
                     delistCount: det.count,
                     windowMs: det.windowMs,
                     sampleOrderIds: det.sampleOrderIds,
-                    mentionRoleId: row.mentionRoleId,
+                    mentionRoleId: delistPing,
                     floorBeforeEth: floorBefore,
                     floorImpactPending: true,
                     contextualExplanation: cxDel,
@@ -415,6 +447,7 @@ export class MarketIndexer {
                 contract: det.contract,
                 chain: det.chain,
                 floorBefore,
+                mentionRoleId: impactRouteDel?.mentionRoleId ?? null,
             });
         }
     }
