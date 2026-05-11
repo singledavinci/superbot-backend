@@ -56,6 +56,28 @@ import type { IntelligenceReport } from '@superbot/types';
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 
+/**
+ * BullMQ rejects custom job IDs containing ':'. Sales-indexer eventIds use the
+ * 'opensea:ethereum:<tx>:<log>' form, and a couple of jobId templates below
+ * include literal ':' separators. This helper normalizes any string to a
+ * BullMQ-safe form by replacing ':' with '-'.
+ */
+function safeJobId(s: string): string {
+    return String(s).replace(/:/g, '-');
+}
+
+/**
+ * Format a JS Date / epoch ms as ClickHouse DateTime literal
+ * ('YYYY-MM-DD HH:MM:SS'). Default ClickHouse date_time_input_format=basic
+ * rejects ISO 8601, and @clickhouse/client serializes JS Date as
+ * '<unquoted ISO>' in JSONEachRow payloads, so the row otherwise fails with
+ * "Cannot parse input: expected '\"' before: '.244Z'".
+ */
+function chDateTime(d: Date | number): string {
+    const t = typeof d === 'number' ? new Date(d) : d;
+    return t.toISOString().replace('T', ' ').replace(/\.\d+Z$/, '');
+}
+
 function readWalletBatchEnabled(): boolean {
     return process.env.WALLET_BATCH_ENABLED !== 'false';
 }
@@ -290,7 +312,7 @@ export class EventWorker {
             await discordDeliveryQueue.add(
                 'discord_alert',
                 solo as Record<string, unknown>,
-                { jobId: `alert-${jobSuffix}-${evid}-${cid}` },
+                { jobId: safeJobId(`alert-${jobSuffix}-${evid}-${cid}`) },
             );
             return;
         }
@@ -406,7 +428,7 @@ export class EventWorker {
         };
 
         await discordDeliveryQueue.add('discord_alert', batchPayload, {
-            jobId: `wallet-action-batch:${batchEventId}:${channelId}`,
+            jobId: safeJobId(`wallet-action-batch:${batchEventId}:${channelId}`),
         });
     }
 
@@ -569,7 +591,7 @@ export class EventWorker {
                         : null,
             },
             {
-                jobId: `floor-followup-discord:${originalEventId}:${channelId}`,
+                jobId: safeJobId(`floor-followup-discord:${originalEventId}:${channelId}`),
                 removeOnComplete: { age: 3600 },
                 removeOnFail: { age: 86400 },
             },
@@ -794,7 +816,7 @@ export class EventWorker {
                 table: 'superbot_analytics.whale_trades',
                 values: [
                     {
-                        timestamp: new Date(tsMillis),
+                        timestamp: chDateTime(tsMillis),
                         chain,
                         contract,
                         whale_address: eventType === 'SALE' ? (price === '0' ? from : to) : to,
@@ -1030,7 +1052,7 @@ export class EventWorker {
                 };
 
                 const soloJobOpts = {
-                    jobId: `alert-${wallet.id}-${eventId}-${channelId}`,
+                    jobId: safeJobId(`alert-${wallet.id}-${eventId}-${channelId}`),
                 };
 
                 if (walletBatchRoutingActive()) {
@@ -1194,7 +1216,7 @@ export class EventWorker {
                 aiNarrative: clusterNar ?? undefined,
             },
             {
-                jobId: `cluster-${det.guildDbId}-${det.eventId}`,
+                jobId: safeJobId(`cluster-${det.guildDbId}-${det.eventId}`),
                 removeOnComplete: { age: 3600 },
                 removeOnFail: { age: 86400 },
             },
@@ -1297,7 +1319,7 @@ export class EventWorker {
                     aiNarrative: sweepNar ?? undefined,
                 },
                 {
-                    jobId: `sweep-${row.id}-${sweep.eventId}`,
+                    jobId: safeJobId(`sweep-${row.id}-${sweep.eventId}`),
                     removeOnComplete: { age: 3600 },
                     removeOnFail: { age: 86400 },
                 },
@@ -1469,7 +1491,7 @@ export class EventWorker {
                     aiNarrative: hotNar ?? undefined,
                 },
                 {
-                    jobId: `hot-mint-${row.id}-${det.eventId}`,
+                    jobId: safeJobId(`hot-mint-${row.id}-${det.eventId}`),
                     removeOnComplete: { age: 3600 },
                     removeOnFail: { age: 86400 },
                 },
