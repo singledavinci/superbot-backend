@@ -70,6 +70,16 @@ export class SeaDropResolver {
         }
 
         const nft = args.nftContract.toLowerCase();
+        const canonHint = canonicalSeaDropForChain(args.chainId);
+        if (canonHint && nft === canonHint.toLowerCase()) {
+            return {
+                ok: false,
+                code: 'FAIL_UNKNOWN_FUNCTION',
+                message:
+                    'This address is the SeaDrop minter contract, not your NFT collection. Pass the ERC-721 token contract from the drop (OpenSea → Details → Contract). Mainnet minter is 0x00005EA00Ac477B1030CE78506496e8C2dE24bf5 — copy carefully (common typo: 0x80005… instead of 0x00005…).',
+            };
+        }
+
         let openSeaSlug: string | null = null;
         try {
             const url = `https://api.opensea.io/api/v2/chain/${chainSlug}/contract/${nft}`;
@@ -95,7 +105,7 @@ export class SeaDropResolver {
             /* ERC721SeaDrop clones often omit seaDrop(); try canonical minter below. */
         }
 
-        const canon = canonicalSeaDropForChain(args.chainId);
+        const canon = canonHint;
         if (!seaDropAddr && canon) {
             const sdCanon = new Contract(canon, SEA_DROP_IFACE, provider);
             try {
@@ -115,7 +125,7 @@ export class SeaDropResolver {
                 ok: false,
                 code: 'FAIL_UNKNOWN_FUNCTION',
                 message: triedCanonResolver
-                    ? 'NFT has no seaDrop() and canonical SeaDrop has no configured public drop for this contract'
+                    ? 'NFT has no seaDrop() and canonical SeaDrop has no configured public drop for this contract. Confirm --contract is your collection token (not the minter 0x00005EA00Ac477B1030CE78506496e8C2dE24bf5).'
                     : 'NFT does not expose seaDrop(); set MINT_SEADROP_CANONICAL to the chain minter or use a token that implements seaDrop()',
             };
         }

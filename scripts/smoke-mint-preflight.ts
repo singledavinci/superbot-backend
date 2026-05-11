@@ -16,6 +16,9 @@
  *     --chain-id 1
  *
  *   npm run smoke:mint-preflight -- --contract 0x... --wallet 0x... --mode prepare
+ *
+ * --contract must be the NFT collection (ERC-721) address, not the OpenSea SeaDrop minter
+ * (0x00005EA00Ac477B1030CE78506496e8C2dE24bf5 on mainnet).
  */
 
 import * as dotenv from 'dotenv';
