@@ -33,6 +33,10 @@ export interface PolicyInput {
     nonceStateUncertain?: boolean;
     /** MainnetReadinessGate allows mainnet broadcast */
     mainnetReadinessOk?: boolean;
+    /** When false, live execution blocked (strict live path). Omitted = skip check (preflight-only). */
+    gasCapsConfigured?: boolean;
+    /** When false, live execution blocked. Omitted = skip check. */
+    providerHealthy?: boolean;
 }
 
 export class ExecutionPolicyEngine {
@@ -45,11 +49,13 @@ export class ExecutionPolicyEngine {
         if (!input.clockDriftOk && mintEnv.MINT_CLOCK_DRIFT_CHECK_ENABLED) return 'BLOCK_CLOCK_DRIFT';
         if (!input.signerConfigured && mintEnv.MINT_REQUIRE_SECURE_SIGNER) return 'BLOCK_SIGNER_MISSING';
         if (!input.simulationOk) return 'BLOCK_SIMULATION';
+        if (input.gasCapsConfigured === false) return 'BLOCK_GAS_CAP';
+        if (input.providerHealthy === false) return 'BLOCK_PROVIDER_UNHEALTHY';
 
-        const mainnet = mintEnv.MINT_DEFAULT_CHAIN_ID === 1 || input.chainId === 1;
-        if (mainnet && mintEnv.MINT_TESTNET_ONLY) return 'BLOCK_MAINNET_DISABLED';
-        if (mainnet && !mintEnv.MINT_MAINNET_BROADCAST_ENABLED) return 'BLOCK_MAINNET_DISABLED';
-        if (mainnet && input.mainnetReadinessOk === false) return 'BLOCK_MAINNET_READINESS';
+        const onMainnet = input.chainId === 1;
+        if (onMainnet && mintEnv.MINT_TESTNET_ONLY) return 'BLOCK_MAINNET_DISABLED';
+        if (onMainnet && !mintEnv.MINT_MAINNET_BROADCAST_ENABLED) return 'BLOCK_MAINNET_DISABLED';
+        if (onMainnet && input.mainnetReadinessOk === false) return 'BLOCK_MAINNET_READINESS';
 
         if (!isLiveEngineMode()) return 'BLOCK_EXECUTION_DISABLED';
 

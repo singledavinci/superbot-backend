@@ -1,5 +1,6 @@
-import { JsonRpcProvider } from 'ethers';
+import { JsonRpcProvider, Transaction } from 'ethers';
 import { mintEnv } from '../config/mintEnv';
+import { assertMainnetBroadcastAllowed } from './mainnetGuard';
 
 export interface BroadcastResult {
     provider: string;
@@ -11,6 +12,32 @@ export interface BroadcastResult {
 
 export class BroadcastEngine {
     async broadcastRaw(args: { rawTransaction: string; urls: string[] }): Promise<BroadcastResult[]> {
+        let parsed: Transaction;
+        try {
+            parsed = Transaction.from(args.rawTransaction);
+        } catch {
+            return [
+                {
+                    provider: 'engine',
+                    ok: false,
+                    latencyMs: 0,
+                    error: 'invalid raw transaction',
+                },
+            ];
+        }
+        try {
+            assertMainnetBroadcastAllowed(Number(parsed.chainId));
+        } catch (e: unknown) {
+            return [
+                {
+                    provider: 'policy',
+                    ok: false,
+                    latencyMs: 0,
+                    error: e instanceof Error ? e.message : String(e),
+                },
+            ];
+        }
+
         const results: BroadcastResult[] = [];
         const urls = args.urls.slice(0, mintEnv.MINT_MAX_RPC_BROADCASTS);
         for (const url of urls) {

@@ -1,4 +1,5 @@
 import type { Prisma, PrismaClient } from '@superbot/database';
+import type { JsonRpcProvider } from 'ethers';
 import type IORedis from 'ioredis';
 
 const REDIS_MIRROR_PREFIX = 'mint:nonce:mirror:';
@@ -43,6 +44,22 @@ export class NonceManager {
         await this.prisma.nonceLock.updateMany({
             where: { mintJobId, status: 'submitted' },
             data: { status: 'replacing' },
+        });
+    }
+
+    async getPendingNonce(provider: JsonRpcProvider, walletAddress: string): Promise<number> {
+        const n = await provider.getTransactionCount(walletAddress, 'pending');
+        return Number(n);
+    }
+
+    /** Terminal states release the logical lock (Postgres is source of truth). */
+    async finalizeLock(
+        mintJobId: string,
+        terminalStatus: 'confirmed' | 'failed' | 'cancelled' | 'released',
+    ): Promise<void> {
+        await this.prisma.nonceLock.updateMany({
+            where: { mintJobId, status: { in: ['locked', 'submitted', 'replacing'] } },
+            data: { status: terminalStatus, releasedAt: new Date() },
         });
     }
 

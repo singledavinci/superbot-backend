@@ -2,7 +2,7 @@ import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } f
 import { mintEnginePost } from '../lib/mintHttp';
 
 const FOOTER =
-    'Not financial advice. Mint success not guaranteed. Never share seed phrases or private keys. Transactions may fail or cost gas.';
+    'Execution tools are automation-based and not financial advice. Mint success is not guaranteed. Never share seed phrases or private keys. Transactions may fail or cost gas.';
 
 export const data = new SlashCommandBuilder()
     .setName('mint-status')
@@ -23,7 +23,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     const embed = new EmbedBuilder()
         .setTitle('Mint engine status')
         .setDescription(
-            `Mode: **${j.engineMode}**\nLive: **${j.liveExecutionEnabled}**\nMainnet broadcast: **${j.mainnetBroadcastEnabled}**\nEmergency stop: **${j.emergencyStop}**\nTestnet only: **${j.testnetOnly}**\nSigner configured: **${j.signerConfigured}**`,
+            `Mode: **${j.engineMode}**\nLive execution flag: **${j.liveExecutionEnabled}**\nMainnet broadcast: **${j.mainnetBroadcastEnabled}** (disabled = safe)\nEmergency stop: **${j.emergencyStop}**\nTestnet only: **${j.testnetOnly}**\nSigner configured: **${j.signerConfigured}**\nDefault chain id (env): **${typeof (j as { defaultChainId?: number }).defaultChainId === 'number' ? (j as { defaultChainId: number }).defaultChainId : '—'}**`,
         )
         .setFooter({ text: FOOTER });
     await interaction.editReply({ embeds: [embed] });

@@ -66,6 +66,16 @@ export const mintEnv = {
     MINT_TESTNET_LIVE_VERIFIED_AT: process.env.MINT_TESTNET_LIVE_VERIFIED_AT || '',
 };
 
+/** Required for live execution path when enforcing gas / cost caps. */
+export function mintGasCapsConfigured(): boolean {
+    return (
+        !!(mintEnv.MINT_MAX_FEE_GWEI || '').trim() &&
+        !!(mintEnv.MINT_MAX_PRIORITY_FEE_GWEI || '').trim() &&
+        !!(mintEnv.MINT_MAX_TOTAL_COST_NATIVE || '').trim()
+    );
+}
+
+
 export function isLiveEngineMode(): boolean {
     return mintEnv.MINT_ENGINE_MODE === 'live';
 }

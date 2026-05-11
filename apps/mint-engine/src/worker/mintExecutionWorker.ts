@@ -27,6 +27,14 @@ export async function startMintExecutionWorkers(args: {
                     include: { wallet: true, guild: true, user: true },
                 });
                 if (!j?.wallet?.address || !j.guild || !j.user) return;
+
+                if (j.executionMode === 'live') {
+                    const out = await engine.executeLiveMintJob(mintJobId);
+                    if (out.ok) bumpMintJobMetric('succeeded');
+                    else bumpMintJobMetric('failed');
+                    return;
+                }
+
                 const execMode = j.executionMode === 'prepare' || j.executionMode === 'simulation' ? j.executionMode : 'prepare';
                 const pre = await engine.preflight({
                     guildDiscordId: j.guild.discordId,

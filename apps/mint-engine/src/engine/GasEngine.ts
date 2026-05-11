@@ -1,5 +1,6 @@
 import { JsonRpcProvider, parseUnits } from 'ethers';
 import { mintEnv } from '../config/mintEnv';
+import type { MintPlan } from './TransactionPlanner';
 
 export interface GasStrategy {
     maxFeePerGas: bigint;
@@ -48,5 +49,34 @@ export class GasEngine {
             gasLimit: args.gasLimit,
             estimatedTotalCostWei: args.gasLimit * maxFee,
         };
+    }
+
+    /**
+     * value + gasLimit*maxFee must not exceed MINT_MAX_TOTAL_COST_NATIVE (wei decimal string).
+     */
+    validatePlanTotalCost(plan: MintPlan): { ok: true } | { ok: false; message: string } {
+        const raw = (mintEnv.MINT_MAX_TOTAL_COST_NATIVE || '').trim();
+        if (!raw) return { ok: false, message: 'MINT_MAX_TOTAL_COST_NATIVE is not set' };
+        let cap: bigint;
+        try {
+            cap = BigInt(raw);
+        } catch {
+            return { ok: false, message: 'MINT_MAX_TOTAL_COST_NATIVE is not a valid integer wei string' };
+        }
+        let value: bigint;
+        try {
+            value = BigInt(plan.valueWei);
+        } catch {
+            return { ok: false, message: 'plan valueWei invalid' };
+        }
+        const gasMax = plan.gasLimit * plan.maxFeePerGas;
+        const total = value + gasMax;
+        if (total > cap) {
+            return {
+                ok: false,
+                message: `Planned cost ${total.toString()} wei exceeds MINT_MAX_TOTAL_COST_NATIVE cap ${cap.toString()}`,
+            };
+        }
+        return { ok: true };
     }
 }

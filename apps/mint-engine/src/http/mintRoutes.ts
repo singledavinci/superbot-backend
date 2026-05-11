@@ -46,6 +46,7 @@ export function registerMintRoutes(
             engineMode: mintEnv.MINT_ENGINE_MODE,
             liveExecutionEnabled: mintEnv.MINT_EXECUTION_ENABLED,
             mainnetBroadcastEnabled: mintEnv.MINT_MAINNET_BROADCAST_ENABLED,
+            defaultChainId: mintEnv.MINT_DEFAULT_CHAIN_ID,
             emergencyStop: mintEnv.MINT_EMERGENCY_STOP,
             testnetOnly: mintEnv.MINT_TESTNET_ONLY,
             signerConfigured: signer.signerConfigured(),
