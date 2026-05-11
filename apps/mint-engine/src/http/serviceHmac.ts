@@ -21,6 +21,11 @@ import { mintEnv } from '../config/mintEnv';
 
 const REDIS_NONCE_KEY = 'mint:s2s:nonce:';
 
+/** Read secret at request time so runtime env (e.g. Railway) always matches in-process updates. */
+export function readMintEngineServiceSecret(): string {
+    return (process.env.MINT_ENGINE_SERVICE_SECRET || '').replace(/^\uFEFF/, '').trim();
+}
+
 export function sha256HexBody(body: Buffer | string): string {
     const buf = typeof body === 'string' ? Buffer.from(body, 'utf8') : body;
     return createHash('sha256').update(buf).digest('hex');
@@ -66,7 +71,7 @@ function hexToBuf(hex: string): Buffer | null {
  */
 export function createHmacAuthMiddleware(redis: IORedis | null) {
     return async function hmacAuth(req: Request, res: Response, next: NextFunction): Promise<void> {
-        const secret = mintEnv.MINT_ENGINE_SERVICE_SECRET;
+        const secret = readMintEngineServiceSecret();
         if (!secret) {
             console.error('[MintEngine][auth] MINT_ENGINE_SERVICE_SECRET is not set');
             res.status(503).json({ error: 'SERVICE_AUTH_NOT_CONFIGURED' });
@@ -126,14 +131,24 @@ export function createHmacAuthMiddleware(redis: IORedis | null) {
 
         const sigBuf = hexToBuf(sig);
         const expBuf = hexToBuf(expected);
+        const bodySha = sha256HexBody(rawBody);
+        const allowDiag = mintEnv.MINT_ENGINE_MODE !== 'live';
+        const diag = allowDiag
+            ? {
+                  signPath: pathOnly,
+                  bodySha256: bodySha,
+                  secretLen: secret.length,
+                  expectedSigPrefix: expected.slice(0, 10),
+              }
+            : {};
         if (!sigBuf || !expBuf || sigBuf.length !== expBuf.length) {
-            console.warn('[MintEngine][auth] bad_signature', { service, path: req.path, ts });
-            res.status(401).json({ error: 'BAD_SIGNATURE' });
+            console.warn('[MintEngine][auth] bad_signature', { service, path: req.path, pathOnly, ts, ...diag });
+            res.status(401).json({ error: 'BAD_SIGNATURE', ...diag });
             return;
         }
         if (!timingSafeEqual(sigBuf, expBuf)) {
-            console.warn('[MintEngine][auth] bad_signature', { service, path: req.path, ts });
-            res.status(401).json({ error: 'BAD_SIGNATURE' });
+            console.warn('[MintEngine][auth] bad_signature', { service, path: req.path, pathOnly, ts, ...diag });
+            res.status(401).json({ error: 'BAD_SIGNATURE', ...diag });
             return;
         }
 

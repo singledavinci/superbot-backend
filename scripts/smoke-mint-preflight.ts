@@ -51,7 +51,10 @@ function hasFlag(name: string): boolean {
     return process.argv.includes(name);
 }
 
-async function postMint(path: string, jsonBody: Record<string, unknown>): Promise<{ status: number; json: Record<string, unknown> }> {
+async function postMint(
+    path: string,
+    jsonBody: Record<string, unknown>,
+): Promise<{ status: number; json: Record<string, unknown>; meta: { fullPath: string; body: string; sig: string; ts: number; nonce: string } }> {
     const base = (process.env.MINT_ENGINE_URL || 'http://127.0.0.1:3847').replace(/\/+$/, '');
     const fullPath = `/v1/mint${path}`;
     const url = `${base}${fullPath}`;
@@ -73,7 +76,7 @@ async function postMint(path: string, jsonBody: Record<string, unknown>): Promis
         body,
     });
     const j = (await res.json()) as Record<string, unknown>;
-    return { status: res.status, json: j };
+    return { status: res.status, json: j, meta: { fullPath, body, sig, ts, nonce } };
 }
 
 async function main(): Promise<void> {
@@ -105,7 +108,7 @@ async function main(): Promise<void> {
 
     let jobId: string | null = null;
     if (!skipJob) {
-        const jobRes = await postMint('/jobs', {
+        const jobPayload: Record<string, unknown> = {
             guildDiscordId,
             userDiscordId,
             walletAddress: wallet,
@@ -117,10 +120,22 @@ async function main(): Promise<void> {
             executionMode: mode,
             chainId,
             quantity,
-        });
+        };
+        const jobRes = await postMint('/jobs', jobPayload);
         console.log('POST /jobs HTTP', jobRes.status);
         if (jobRes.json.error) {
             console.log(JSON.stringify(jobRes.json, null, 2));
+            if (jobRes.json.error === 'BAD_SIGNATURE') {
+                const sec = (process.env.MINT_ENGINE_SERVICE_SECRET || '').replace(/^\uFEFF/, '').trim();
+                console.error('[smoke] client HMAC debug:', {
+                    signPath: jobRes.meta.fullPath,
+                    bodySha256: sha256Hex(jobRes.meta.body),
+                    secretLen: sec.length,
+                    sigPrefix: jobRes.meta.sig.slice(0, 10),
+                    expectedSigPrefix: typeof jobRes.json.expectedSigPrefix === 'string' ? jobRes.json.expectedSigPrefix : '—',
+                    hint: 'If signPath + bodySha256 + secretLen match server JSON but sig prefixes differ, secrets differ. If bodySha256 differs, body bytes differ.',
+                });
+            }
             console.error('Job creation failed; fix DB fixtures or use --skip-job for HTTP-only preflight.');
             process.exit(1);
         }
