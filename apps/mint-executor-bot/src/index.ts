@@ -40,7 +40,9 @@ export class MintExecutorBot {
         await this.loadCommands();
         const token = process.env.MINT_EXECUTOR_DISCORD_TOKEN || process.env.DISCORD_TOKEN;
         if (!token) {
-            console.error('[MintExecutorBot] Missing MINT_EXECUTOR_DISCORD_TOKEN');
+            console.error(
+                '[MintExecutorBot] Missing Discord token: set MINT_EXECUTOR_DISCORD_TOKEN (preferred) or DISCORD_TOKEN in .env',
+            );
             process.exit(1);
         }
 
