@@ -4,16 +4,17 @@ import { mintEnginePost } from '../lib/mintHttp';
 export const data = new SlashCommandBuilder()
     .setName('mint-approve-wallet')
     .setDescription('Grant mainnet execution approval for one wallet (mint admins only)')
+    /** Discord requires every `.setRequired(true)` option before any optional option. */
     .addStringOption(o => o.setName('wallet').setDescription('Wallet address (0x…, chain 1)').setRequired(true))
-    .addUserOption(o =>
-        o.setName('target_user').setDescription('Discord user this approval is for (defaults to you)').setRequired(false),
-    )
     .addStringOption(o => o.setName('max_fee_per_gas').setDescription('Gas cap: maxFeePerGas (wei string, e.g. gwei decimal)').setRequired(true))
     .addStringOption(o =>
         o.setName('max_priority_fee_per_gas').setDescription('Gas cap: maxPriorityFeePerGas (wei string)').setRequired(true),
     )
     .addStringOption(o =>
         o.setName('max_total_cost_native').setDescription('Max total native cost cap (decimal string, ETH units per engine env)').setRequired(true),
+    )
+    .addUserOption(o =>
+        o.setName('target_user').setDescription('Discord user this approval is for (defaults to you)').setRequired(false),
     )
     .addIntegerOption(o =>
         o.setName('max_quantity').setDescription('Max mint quantity allowed by this approval').setRequired(false).setMinValue(1),
