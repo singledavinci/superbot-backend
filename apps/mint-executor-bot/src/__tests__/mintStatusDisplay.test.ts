@@ -4,13 +4,40 @@ import {
     buildMintStatusDescription,
     displayHealthField,
     formatMintStatusEngineFailure,
+    pickStatusField,
 } from '../lib/mintStatusDisplay';
 
 describe('mintStatusDisplay', () => {
     it('never renders undefined as text', () => {
         assert.equal(displayHealthField(undefined), 'missing');
         assert.equal(displayHealthField(null), 'missing');
+        assert.equal(displayHealthField('undefined'), 'missing');
+        assert.equal(displayHealthField('  undefined  '), 'missing');
         assert.ok(!buildMintStatusDescription({}).includes('undefined'));
+    });
+
+    it('maps POST /status-style keys (engineMode, liveExecutionEnabled)', () => {
+        const desc = buildMintStatusDescription({
+            engineMode: 'live',
+            liveExecutionEnabled: true,
+            mainnetBroadcastEnabled: true,
+            emergencyStopEffective: false,
+            testnetOnly: false,
+            signerConfigured: true,
+            defaultChainId: 1,
+            mainnetBetaEnabled: true,
+            mainnetDryRunEnabled: false,
+            mainnetMaxActiveJobs: 1,
+            mainnetMaxQuantity: 1,
+        });
+        assert.ok(desc.includes('Mode: **live**'));
+        assert.ok(desc.includes('Live execution flag: **true**'));
+        assert.ok(!desc.includes('undefined'));
+    });
+
+    it('pickStatusField prefers first present key', () => {
+        assert.equal(pickStatusField({ mode: 'live', engineMode: 'prepare' }, ['mode', 'engineMode']), 'live');
+        assert.equal(pickStatusField({ engineMode: 'live' }, ['mode', 'engineMode']), 'live');
     });
 
     it('renders real values from a full health payload', () => {

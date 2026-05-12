@@ -1,9 +1,27 @@
-/** Single display value for Discord — never "undefined". */
+/** First defined value among keys (for GET health vs POST /status field-name drift). */
+export function pickStatusField(j: Record<string, unknown>, keys: string[]): unknown {
+    for (const k of keys) {
+        if (!Object.prototype.hasOwnProperty.call(j, k)) continue;
+        const v = j[k];
+        if (v !== undefined && v !== null) return v;
+    }
+    return undefined;
+}
+
+/** Single display value for Discord — never "undefined" or empty-looking garbage. */
 export function displayHealthField(v: unknown): string {
     if (v === undefined || v === null) return 'missing';
     if (typeof v === 'boolean' || typeof v === 'number') return String(v);
-    if (typeof v === 'string') return v === '' ? 'missing' : v;
-    return String(v);
+    if (typeof v === 'string') {
+        const t = v.trim();
+        if (t === '') return 'missing';
+        const low = t.toLowerCase();
+        if (low === 'undefined' || low === 'null' || low === 'nan') return 'missing';
+        return v;
+    }
+    const s = String(v);
+    if (s === 'undefined' || s === 'null') return 'missing';
+    return s;
 }
 
 /**
@@ -11,21 +29,21 @@ export function displayHealthField(v: unknown): string {
  */
 export function buildMintStatusDescription(j: Record<string, unknown>): string {
     const lines: string[] = [
-        `Mode: **${displayHealthField(j.mode)}**`,
-        `Live execution flag: **${displayHealthField(j.executionEnabled)}**`,
-        `Mainnet broadcast: **${displayHealthField(j.mainnetBroadcastEnabled)}**`,
-        `Emergency stop: **${displayHealthField(j.emergencyStop)}**`,
-        `Testnet only: **${displayHealthField(j.testnetOnly)}**`,
-        `Signer configured: **${displayHealthField(j.signerConfigured)}**`,
-        `Default chain id: **${displayHealthField(j.defaultChainId)}**`,
-        `Mainnet beta: **${displayHealthField(j.mainnetBeta)}**`,
-        `Mainnet dry-run: **${displayHealthField(j.mainnetDryRun)}**`,
-        `Copy-mint live: **${displayHealthField(j.copyMintLiveEnabled)}**`,
-        `Private relay: **${displayHealthField(j.privateRelayEnabled)}**`,
-        `Auto replace: **${displayHealthField(j.autoReplaceEnabled)}**`,
-        `Manual confirmation: **${displayHealthField(j.manualConfirmationRequired)}**`,
-        `Max active jobs: **${displayHealthField(j.maxActiveJobs)}**`,
-        `Max quantity: **${displayHealthField(j.maxQuantity)}**`,
+        `Mode: **${displayHealthField(pickStatusField(j, ['mode', 'engineMode']))}**`,
+        `Live execution flag: **${displayHealthField(pickStatusField(j, ['executionEnabled', 'liveExecutionEnabled']))}**`,
+        `Mainnet broadcast: **${displayHealthField(pickStatusField(j, ['mainnetBroadcastEnabled']))}**`,
+        `Emergency stop: **${displayHealthField(pickStatusField(j, ['emergencyStop', 'emergencyStopEffective']))}**`,
+        `Testnet only: **${displayHealthField(pickStatusField(j, ['testnetOnly']))}**`,
+        `Signer configured: **${displayHealthField(pickStatusField(j, ['signerConfigured']))}**`,
+        `Default chain id: **${displayHealthField(pickStatusField(j, ['defaultChainId']))}**`,
+        `Mainnet beta: **${displayHealthField(pickStatusField(j, ['mainnetBeta', 'mainnetBetaEnabled']))}**`,
+        `Mainnet dry-run: **${displayHealthField(pickStatusField(j, ['mainnetDryRun', 'mainnetDryRunEnabled']))}**`,
+        `Copy-mint live: **${displayHealthField(pickStatusField(j, ['copyMintLiveEnabled']))}**`,
+        `Private relay: **${displayHealthField(pickStatusField(j, ['privateRelayEnabled']))}**`,
+        `Auto replace: **${displayHealthField(pickStatusField(j, ['autoReplaceEnabled']))}**`,
+        `Manual confirmation: **${displayHealthField(pickStatusField(j, ['manualConfirmationRequired']))}**`,
+        `Max active jobs: **${displayHealthField(pickStatusField(j, ['maxActiveJobs', 'mainnetMaxActiveJobs']))}**`,
+        `Max quantity: **${displayHealthField(pickStatusField(j, ['maxQuantity', 'mainnetMaxQuantity']))}**`,
     ];
     return lines.join('\n');
 }
