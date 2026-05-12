@@ -49,11 +49,31 @@ export class MintExecutorBot {
         this.client.once(Events.ClientReady, async c => {
             console.log(`[MintExecutorBot] Ready as ${c.user.tag}`);
             const rest = new REST({ version: '10' }).setToken(token);
-            const body = [...this.commands.values()].map(x => x.data.toJSON());
+            const cmds = [...this.commands.values()];
+            const body = cmds.map(x => x.data.toJSON());
+            const names = cmds.map(x => x.data.name).sort();
+            console.log(`[MintExecutorBot] Loaded ${cmds.length} command(s): ${names.join(', ')}`);
+
             const clientId = c.application?.id;
-            if (clientId && body.length) {
+            if (!clientId || !body.length) {
+                console.warn('[MintExecutorBot] Skipping slash registration (missing application id or empty command list)');
+                return;
+            }
+
+            const guildId = process.env.MINT_EXECUTOR_GUILD_ID?.trim();
+            try {
+                if (guildId) {
+                    await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
+                    console.log(
+                        `[MintExecutorBot] Registered ${body.length} guild command(s) for guild ${guildId} (visible in this server immediately)`,
+                    );
+                }
                 await rest.put(Routes.applicationCommands(clientId), { body });
-                console.log(`[MintExecutorBot] Registered ${body.length} global commands`);
+                console.log(
+                    `[MintExecutorBot] Registered ${body.length} global command(s) — can take up to ~1 hour to show in every server`,
+                );
+            } catch (e) {
+                console.error('[MintExecutorBot] Slash command registration failed:', e);
             }
         });
 

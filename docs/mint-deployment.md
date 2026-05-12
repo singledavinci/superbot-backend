@@ -54,6 +54,7 @@ Point **`MINT_ENGINE_URL`** on the executor bot at that HTTPS origin (or use pri
 | `MINT_EXECUTOR_DISCORD_TOKEN` | yes | **Dedicated** bot application token (do not reuse main `DISCORD_TOKEN`). |
 | `MINT_ENGINE_URL` | yes | Public HTTPS mint-engine URL or internal service URL. |
 | `MINT_ENGINE_SERVICE_SECRET` | yes | **Same** value as mint-engine. |
+| `MINT_EXECUTOR_GUILD_ID` | optional | Your Discord **server** snowflake. When set, slash commands are registered on that guild for **immediate** visibility while testing; **global** commands alone can take **up to ~1 hour** to appear everywhere. |
 | `MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS` | optional | Default `false` on main bot (gates mint file commands). |
 
 ### Start command (mint-engine service)
