@@ -1,6 +1,7 @@
 import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
-import { mintEngineGet } from '../lib/mintHttp';
+import { mintEngineGet, mintEngineHostLabel } from '../lib/mintHttp';
 import { buildMintStatusDescription, formatMintStatusEngineFailure } from '../lib/mintStatusDisplay';
+import { mintExecutorStatusEnvBlocker, mintExecutorStatusEnvWarnings } from '../lib/mintStatusEnv';
 
 const FOOTER =
     'Execution tools are automation-based and not financial advice. Mint success is not guaranteed. Never share seed phrases or private keys. Transactions may fail or cost gas.';
@@ -17,6 +18,19 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         return;
     }
 
+    const envBlock = mintExecutorStatusEnvBlocker();
+    if (envBlock) {
+        await interaction.editReply({
+            embeds: [
+                new EmbedBuilder()
+                    .setTitle('Mint engine status')
+                    .setDescription(`**${envBlock}**`)
+                    .setFooter({ text: FOOTER }),
+            ],
+        });
+        return;
+    }
+
     let res: Response;
     try {
         res = await mintEngineGet('/health/mint-engine');
@@ -24,7 +38,13 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         const msg = e instanceof Error ? e.message : String(e);
         const embed = new EmbedBuilder()
             .setTitle('Mint engine status')
-            .setDescription(formatMintStatusEngineFailure({ kind: 'network', message: msg }))
+            .setDescription(
+                formatMintStatusEngineFailure({
+                    kind: 'network',
+                    message: msg,
+                    engineHost: mintEngineHostLabel(),
+                }),
+            )
             .setFooter({ text: FOOTER });
         await interaction.editReply({ embeds: [embed] });
         return;
@@ -51,13 +71,15 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
     }
 
     if (!res.ok || j.ok === false) {
+        const status = res.status;
+        const kind = status === 401 || status === 403 ? 'auth' : 'http';
         const embed = new EmbedBuilder()
             .setTitle('Mint engine status')
             .setDescription(
                 formatMintStatusEngineFailure({
-                    kind: 'http',
+                    kind,
                     message: typeof j.message === 'string' ? j.message : 'engine_error',
-                    httpStatus: res.status,
+                    httpStatus: status,
                     bodySnippet: text,
                 }),
             )
@@ -66,9 +88,10 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         return;
     }
 
-    const embed = new EmbedBuilder()
-        .setTitle('Mint engine status')
-        .setDescription(buildMintStatusDescription(j))
-        .setFooter({ text: FOOTER });
+    const warnings = mintExecutorStatusEnvWarnings();
+    const body =
+        buildMintStatusDescription(j) + (warnings.length ? '\n\n—\n' + warnings.join('\n') : '');
+
+    const embed = new EmbedBuilder().setTitle('Mint engine status').setDescription(body).setFooter({ text: FOOTER });
     await interaction.editReply({ embeds: [embed] });
 }

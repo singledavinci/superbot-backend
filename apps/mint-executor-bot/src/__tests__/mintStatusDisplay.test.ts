@@ -49,6 +49,27 @@ describe('mintStatusDisplay', () => {
         assert.ok(s.includes('MINT_ENGINE_URL'));
     });
 
+    it('formats network failure with engine host when provided', () => {
+        const s = formatMintStatusEngineFailure({
+            kind: 'network',
+            message: 'ECONNREFUSED',
+            engineHost: 'superbot-mint-engine-production.up.railway.app',
+        });
+        assert.ok(s.includes('Engine URL host: **superbot-mint-engine-production.up.railway.app**'));
+    });
+
+    it('formats auth failure for 401/403-style responses', () => {
+        const s = formatMintStatusEngineFailure({
+            kind: 'auth',
+            message: 'invalid_hmac',
+            httpStatus: 401,
+            bodySnippet: '{"error":"unauthorized"}',
+        });
+        assert.ok(s.includes('Engine auth failed'));
+        assert.ok(s.includes('401'));
+        assert.ok(!s.includes('undefined'));
+    });
+
     it('formats HTTP failure with status', () => {
         const s = formatMintStatusEngineFailure({
             kind: 'http',

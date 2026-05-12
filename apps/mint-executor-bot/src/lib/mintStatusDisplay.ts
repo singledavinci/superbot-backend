@@ -30,18 +30,36 @@ export function buildMintStatusDescription(j: Record<string, unknown>): string {
     return lines.join('\n');
 }
 
+export type MintStatusFailureKind = 'network' | 'http' | 'auth';
+
 export function formatMintStatusEngineFailure(args: {
-    kind: 'network' | 'http';
+    kind: MintStatusFailureKind;
     message: string;
     httpStatus?: number;
     bodySnippet?: string;
+    /** From `MINT_ENGINE_URL` host only — never a secret. */
+    engineHost?: string | null;
 }): string {
     if (args.kind === 'network') {
         return [
             `Engine reachable: **no**`,
+            args.engineHost ? `Engine URL host: **${displayHealthField(args.engineHost)}**` : '',
             `Error: **${displayHealthField(args.message)}**`,
             `Hint: check **MINT_ENGINE_URL** points at the mint-engine service.`,
-        ].join('\n');
+        ]
+            .filter(Boolean)
+            .join('\n');
+    }
+    if (args.kind === 'auth') {
+        const snip = (args.bodySnippet || '').slice(0, 400);
+        return [
+            `**Engine auth failed**`,
+            `HTTP status: **${args.httpStatus ?? 'missing'}**`,
+            `Error: **${displayHealthField(args.message)}**`,
+            snip ? `Response: **${snip}**` : '',
+        ]
+            .filter(Boolean)
+            .join('\n');
     }
     const snip = (args.bodySnippet || '').slice(0, 400);
     return [

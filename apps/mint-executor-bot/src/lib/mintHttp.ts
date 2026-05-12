@@ -25,13 +25,34 @@ export function signMintRequest(args: {
     return createHmac('sha256', args.secret).update(msg, 'utf8').digest('hex');
 }
 
+/** Trimmed base URL when `MINT_ENGINE_URL` is set; otherwise null (do not assume localhost for status). */
+export function mintEngineConfiguredBaseUrl(): string | null {
+    const u = (process.env.MINT_ENGINE_URL || '').trim();
+    return u ? u.replace(/\/+$/, '') : null;
+}
+
+/** Hostname from `MINT_ENGINE_URL` for safe display (no path, query, or credentials). */
+export function mintEngineHostLabel(): string | null {
+    const base = mintEngineConfiguredBaseUrl();
+    if (!base) return null;
+    try {
+        const withScheme = base.includes('://') ? base : `https://${base}`;
+        return new URL(withScheme).host;
+    } catch {
+        return 'invalid URL';
+    }
+}
+
 export function mintEngineBaseUrl(): string {
     return (process.env.MINT_ENGINE_URL || 'http://127.0.0.1:3847').replace(/\/+$/, '');
 }
 
-/** Public GET (no HMAC), e.g. `/health/mint-engine`. */
+/** Public GET (no HMAC), e.g. `/health/mint-engine`. Requires `MINT_ENGINE_URL`. */
 export async function mintEngineGet(path: string): Promise<Response> {
-    const base = mintEngineBaseUrl();
+    const base = mintEngineConfiguredBaseUrl();
+    if (!base) {
+        throw new Error('MINT_ENGINE_URL missing');
+    }
     const p = path.startsWith('/') ? path : `/${path}`;
     const url = `${base}${p}`;
     return fetch(url, { method: 'GET' });
