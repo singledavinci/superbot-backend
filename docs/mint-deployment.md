@@ -4,6 +4,8 @@ Monorepo entry: `src/index.ts`. Process role is selected with **`SERVICE_TYPE`**
 
 ## Railway services
 
+If **`superbot-mint-engine`** has **no GitHub repo attached** in Railway (service **Settings → Source**), deployments will **not** pick up commits from this repository — health checks can stay on an **old stub** forever. Connect the **`singledavinci/superbot-backend`** repo (or your canonical fork), branch **`master`**, root directory **`.`**, build **`npm run build`**, start **`npm run start:mint-engine`** (or **`npm run start`** with **`SERVICE_TYPE=mint-engine`** in variables).
+
 Recommended separate services (do **not** merge into the main intelligence bot):
 
 | Service | `SERVICE_TYPE` | Purpose |
