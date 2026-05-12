@@ -8,16 +8,12 @@ import {
     GatewayIntentBits,
     REST,
     Routes,
-    PermissionFlagsBits,
     type ChatInputCommandInteraction,
 } from 'discord.js';
 
-dotenv.config();
+import { isTrustMintAdmin, isGuildAdministrator } from './lib/mintAdmin';
 
-function isGuildAdmin(interaction: ChatInputCommandInteraction): boolean {
-    if (!interaction.memberPermissions) return false;
-    return interaction.memberPermissions.has(PermissionFlagsBits.Administrator);
-}
+dotenv.config();
 
 export class MintExecutorBot {
     private client: Client;
@@ -63,10 +59,20 @@ export class MintExecutorBot {
             if (!interaction.isChatInputCommand()) return;
             const cmd = this.commands.get(interaction.commandName);
             if (!cmd) return;
-            const adminOnly = ['mint-settings'].includes(interaction.commandName);
-            if (adminOnly && !isGuildAdmin(interaction)) {
-                await interaction.reply({ content: 'Administrator permission required.', ephemeral: true });
-                return;
+            const name = interaction.commandName;
+            if (['mint-emergency-stop', 'mint-emergency-resume', 'mint-approve-wallet', 'mint-revoke-wallet'].includes(name)) {
+                if (!isTrustMintAdmin(interaction)) {
+                    await interaction.reply({
+                        content: 'Administrator permission and mint admin allow-list (if configured) required.',
+                        ephemeral: true,
+                    });
+                    return;
+                }
+            } else if (name === 'mint-settings') {
+                if (!isGuildAdministrator(interaction)) {
+                    await interaction.reply({ content: 'Administrator permission required.', ephemeral: true });
+                    return;
+                }
             }
             try {
                 await cmd.execute(interaction);

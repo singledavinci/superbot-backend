@@ -3,6 +3,7 @@ import { prisma, connectDB } from '@superbot/database';
 import { redisConnection } from '@superbot/queue';
 import { resolveHttpRpcUrl, parseCommaSeparatedRpcUrls } from '@superbot/analytics';
 import { mintEnv } from './config/mintEnv';
+import { getEffectiveEmergencyStop } from './engine/emergencyRuntime';
 import { createHmacAuthMiddleware } from './http/serviceHmac';
 import { registerMintRoutes, registerMetricsRoute } from './http/mintRoutes';
 import { RecoveryWorker } from './engine/RecoveryWorker';
@@ -25,13 +26,15 @@ export async function startMintEngineHttp(): Promise<void> {
     const rpcUrl = resolveMintEngineRpcUrl();
     const app = express();
 
-    app.get('/health/mint-engine', (_req, res) => {
+    app.get('/health/mint-engine', async (_req, res) => {
+        const effectiveEmergency = await getEffectiveEmergencyStop(prisma);
         res.json({
             ok: true,
             service: 'mint-engine',
             mode: mintEnv.MINT_ENGINE_MODE,
             executionEnabled: mintEnv.MINT_EXECUTION_ENABLED,
-            emergencyStop: mintEnv.MINT_EMERGENCY_STOP,
+            emergencyStopEnv: mintEnv.MINT_EMERGENCY_STOP,
+            emergencyStopEffective: effectiveEmergency,
         });
     });
 

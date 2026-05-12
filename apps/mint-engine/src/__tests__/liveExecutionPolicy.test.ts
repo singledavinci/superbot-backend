@@ -8,9 +8,23 @@ describe('Live execution — mainnet guard', () => {
         assert.doesNotThrow(() => assertMainnetBroadcastAllowed(11155111));
     });
 
-    it('mainnet throws when broadcast disabled or testnet-only', () => {
-        if (!mintEnv.MINT_MAINNET_BROADCAST_ENABLED || mintEnv.MINT_TESTNET_ONLY) {
-            assert.throws(() => assertMainnetBroadcastAllowed(1), /MAINNET_DISABLED/);
+    it('mainnet throws a MAINNET_* code unless all controlled broadcast flags pass', () => {
+        let code: string | undefined;
+        try {
+            assertMainnetBroadcastAllowed(1);
+        } catch (e: unknown) {
+            code = (e as Error & { code?: string }).code ?? (e instanceof Error ? e.message : undefined);
+        }
+        const allPass =
+            mintEnv.MINT_MAINNET_BROADCAST_ENABLED &&
+            !mintEnv.MINT_TESTNET_ONLY &&
+            mintEnv.MINT_EXECUTION_ENABLED &&
+            mintEnv.MINT_ENGINE_MODE === 'live' &&
+            mintEnv.MINT_MAINNET_BETA;
+        if (!allPass) {
+            assert.ok(code && String(code).startsWith('MAINNET_'), `expected MAINNET_* code, got ${code}`);
+        } else {
+            assert.equal(code, undefined);
         }
     });
 });

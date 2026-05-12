@@ -1,21 +1,21 @@
-import { mintEnv } from '../config/mintEnv';
+import { mintEnv, isLiveEngineMode } from '../config/mintEnv';
 
 /**
- * Hard guard: never broadcast to mainnet unless explicitly enabled.
- * Throw so callers cannot accidentally skip checks.
+ * Env-level guard: never broadcast to mainnet unless explicit controlled-beta flags pass.
+ * Job-level approval, simulation, nonce lock, and caps are enforced in MintExecutionEngine.
  */
 export function assertMainnetBroadcastAllowed(chainId: number): void {
     if (chainId !== 1) return;
-    if (!mintEnv.MINT_MAINNET_BROADCAST_ENABLED) {
-        const err = new Error('MAINNET_DISABLED');
-        (err as Error & { code?: string }).code = 'MAINNET_DISABLED';
+    const fail = (code: string) => {
+        const err = new Error(code);
+        (err as Error & { code?: string }).code = code;
         throw err;
-    }
-    if (mintEnv.MINT_TESTNET_ONLY) {
-        const err = new Error('MAINNET_DISABLED');
-        (err as Error & { code?: string }).code = 'MAINNET_DISABLED';
-        throw err;
-    }
+    };
+    if (!mintEnv.MINT_MAINNET_BROADCAST_ENABLED) fail('MAINNET_DISABLED');
+    if (mintEnv.MINT_TESTNET_ONLY) fail('MAINNET_DISABLED');
+    if (!mintEnv.MINT_EXECUTION_ENABLED) fail('MAINNET_DISABLED');
+    if (!isLiveEngineMode()) fail('MAINNET_DRY_RUN_ONLY');
+    if (!mintEnv.MINT_MAINNET_BETA) fail('MAINNET_BETA_DISABLED');
 }
 
 export function isMainnetChain(chainId: number): boolean {

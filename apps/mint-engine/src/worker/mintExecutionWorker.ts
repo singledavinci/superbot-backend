@@ -35,6 +35,13 @@ export async function startMintExecutionWorkers(args: {
                     return;
                 }
 
+                if (j.executionMode === 'mainnet_dry_run') {
+                    const out = await engine.executeMainnetDryRunJob(mintJobId);
+                    if (out.ok) bumpMintJobMetric('succeeded');
+                    else bumpMintJobMetric('failed');
+                    return;
+                }
+
                 const execMode = j.executionMode === 'prepare' || j.executionMode === 'simulation' ? j.executionMode : 'prepare';
                 const pre = await engine.preflight({
                     guildDiscordId: j.guild.discordId,

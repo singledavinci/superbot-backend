@@ -23,6 +23,7 @@ model Guild {
   mintJobs                 MintJob[]
   copyMintConfigs          CopyMintConfig[]
   mintWalletAuthorizations MintWalletAuthorization[]
+  mainnetExecutionApprovals MainnetExecutionApproval[]
   createdAt       DateTime           @default(now())
   updatedAt       DateTime           @updatedAt
 }
@@ -41,6 +42,7 @@ model User {
   mintWalletAuthGrants MintWalletAuthorization[]
   copyMintConfigsOwned CopyMintConfig[]
   mintJobs             MintJob[]
+  mainnetExecutionApprovals MainnetExecutionApproval[]
   createdAt           DateTime    @default(now())
   updatedAt           DateTime    @updatedAt
 }
@@ -156,6 +158,7 @@ model MintWallet {
   authorizations       MintWalletAuthorization[]
   mintJobs             MintJob[]
   copyMintConfigs      CopyMintConfig[]
+  mainnetExecutionApprovals MainnetExecutionApproval[]
 
   @@index([userId, chainId])
   @@index([address, chainId])
@@ -374,4 +377,43 @@ model MintMainnetReadiness {
   checklistJson      Json      @default("{}")
   testnetVerifiedAt  DateTime?
   updatedAt          DateTime  @updatedAt
+}
+
+/** Singleton row: operator emergency stop (OR with env MINT_EMERGENCY_STOP). */
+model MintEngineRuntimeState {
+  id            String   @id @default("default")
+  emergencyStop Boolean  @default(false)
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+  metadataJson  Json?
+}
+
+/**
+ * Explicit per-wallet mainnet execution approval with caps and expiry.
+ * Default: no row → mainnet live blocked even if env flags allow.
+ */
+model MainnetExecutionApproval {
+  id                   String    @id @default(uuid())
+  userId               String
+  guildId              String
+  mintWalletId         String
+  walletAddress        String
+  chainId              Int       @default(1)
+  approvedBy           String    @default("")
+  approvalStatus       String    @default("active")
+  maxFeePerGas         String?
+  maxPriorityFeePerGas String?
+  maxTotalCostNative   String?
+  maxQuantity          Int       @default(1)
+  allowedCollections   Json?
+  expiresAt            DateTime
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+  metadataJson         Json?
+  guild                Guild     @relation(fields: [guildId], references: [id], onDelete: Cascade)
+  user                 User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  mintWallet           MintWallet @relation(fields: [mintWalletId], references: [id], onDelete: Cascade)
+
+  @@index([guildId, userId, mintWalletId, approvalStatus])
+  @@index([expiresAt])
 }

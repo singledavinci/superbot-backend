@@ -40,6 +40,33 @@ export class NonceManager {
         return { ok: true };
     }
 
+    /** Same uniqueness as real lock, but status `simulated` for mainnet dry-run (no broadcast). */
+    async acquireSimulatedLockTx(args: {
+        chainId: number;
+        walletAddress: string;
+        nonce: string;
+        mintJobId: string;
+    }): Promise<{ ok: true } | { ok: false; code: string }> {
+        const wallet = args.walletAddress.toLowerCase();
+        try {
+            await this.prisma.$transaction(async (tx: Prisma.TransactionClient) => {
+                await tx.nonceLock.create({
+                    data: {
+                        chainId: args.chainId,
+                        walletAddress: wallet,
+                        nonce: args.nonce,
+                        status: 'simulated',
+                        mintJobId: args.mintJobId,
+                        metadataJson: { kind: 'mainnet_dry_run' } as object,
+                    },
+                });
+            });
+        } catch {
+            return { ok: false, code: 'NONCE_LOCK_CONFLICT' };
+        }
+        return { ok: true };
+    }
+
     async markReplacing(mintJobId: string): Promise<void> {
         await this.prisma.nonceLock.updateMany({
             where: { mintJobId, status: 'submitted' },
@@ -58,7 +85,7 @@ export class NonceManager {
         terminalStatus: 'confirmed' | 'failed' | 'cancelled' | 'released',
     ): Promise<void> {
         await this.prisma.nonceLock.updateMany({
-            where: { mintJobId, status: { in: ['locked', 'submitted', 'replacing'] } },
+            where: { mintJobId, status: { in: ['locked', 'submitted', 'replacing', 'simulated'] } },
             data: { status: terminalStatus, releasedAt: new Date() },
         });
     }

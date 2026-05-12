@@ -3,9 +3,11 @@ import { mintEnv, isLiveEngineMode, isPrepareEngineMode } from '../config/mintEn
 export type PolicyDecision =
     | 'ALLOW_SIMULATION'
     | 'ALLOW_PREPARE'
+    | 'ALLOW_MAINNET_DRY_RUN'
     | 'ALLOW_LIVE_EXECUTION'
     | 'BLOCK_EXECUTION_DISABLED'
     | 'BLOCK_MAINNET_DISABLED'
+    | 'BLOCK_MAINNET_BETA_DISABLED'
     | 'BLOCK_EMERGENCY_STOP'
     | 'BLOCK_SIGNER_MISSING'
     | 'BLOCK_NOT_ELIGIBLE'
@@ -53,6 +55,7 @@ export class ExecutionPolicyEngine {
         if (input.providerHealthy === false) return 'BLOCK_PROVIDER_UNHEALTHY';
 
         const onMainnet = input.chainId === 1;
+        if (onMainnet && !mintEnv.MINT_MAINNET_BETA) return 'BLOCK_MAINNET_BETA_DISABLED';
         if (onMainnet && mintEnv.MINT_TESTNET_ONLY) return 'BLOCK_MAINNET_DISABLED';
         if (onMainnet && !mintEnv.MINT_MAINNET_BROADCAST_ENABLED) return 'BLOCK_MAINNET_DISABLED';
         if (onMainnet && input.mainnetReadinessOk === false) return 'BLOCK_MAINNET_READINESS';
@@ -81,5 +84,16 @@ export class ExecutionPolicyEngine {
     decideSimulation(input: Pick<PolicyInput, 'walletAuthorized'>): PolicyDecision {
         if (!input.walletAuthorized) return 'BLOCK_WALLET_NOT_AUTHORIZED';
         return 'ALLOW_SIMULATION';
+    }
+
+    /** Mainnet dry-run: no live flags, no broadcast; wallet + sim + caps + provider only. */
+    decideMainnetDryRun(
+        input: Pick<PolicyInput, 'walletAuthorized' | 'simulationOk' | 'gasCapsConfigured' | 'providerHealthy'>,
+    ): PolicyDecision {
+        if (!input.walletAuthorized) return 'BLOCK_WALLET_NOT_AUTHORIZED';
+        if (!input.simulationOk) return 'BLOCK_SIMULATION';
+        if (input.gasCapsConfigured === false) return 'BLOCK_GAS_CAP';
+        if (input.providerHealthy === false) return 'BLOCK_PROVIDER_UNHEALTHY';
+        return 'ALLOW_MAINNET_DRY_RUN';
     }
 }

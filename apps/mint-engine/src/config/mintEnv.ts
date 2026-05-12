@@ -64,7 +64,46 @@ export const mintEnv = {
     MINT_SEADROP_CANONICAL: (process.env.MINT_SEADROP_CANONICAL || '').replace(/^\uFEFF/, '').trim(),
 
     MINT_TESTNET_LIVE_VERIFIED_AT: process.env.MINT_TESTNET_LIVE_VERIFIED_AT || '',
+
+    /** When true, `mainnet_dry_run` jobs resolve/simulate on mainnet RPC without sign/broadcast. */
+    MINT_MAINNET_DRY_RUN: bool(process.env.MINT_MAINNET_DRY_RUN, false),
+    /** Comma-separated Discord snowflakes allowed for `/mint-emergency-*` and `/jobs/confirm-mainnet`. */
+    MINT_ADMIN_DISCORD_IDS: (process.env.MINT_ADMIN_DISCORD_IDS || '')
+        .split(',')
+        .map((s) => s.trim())
+        .filter(Boolean),
+    /** Single-wallet mainnet beta: all must match when set (non-empty). */
+    MINT_MAINNET_BETA_WALLET_ADDRESS: (process.env.MINT_MAINNET_BETA_WALLET_ADDRESS || '').trim().toLowerCase(),
+    MINT_MAINNET_BETA_GUILD_DISCORD_ID: (process.env.MINT_MAINNET_BETA_GUILD_DISCORD_ID || '').trim(),
+    MINT_MAINNET_BETA_USER_DISCORD_ID: (process.env.MINT_MAINNET_BETA_USER_DISCORD_ID || '').trim(),
+    /** Master switch for controlled one-wallet mainnet beta (live path requires true). */
+    MINT_MAINNET_BETA: bool(process.env.MINT_MAINNET_BETA, false),
+    MINT_MAINNET_MAX_ACTIVE_JOBS: num(process.env.MINT_MAINNET_MAX_ACTIVE_JOBS, 1),
+    MINT_MAINNET_MAX_QUANTITY: num(process.env.MINT_MAINNET_MAX_QUANTITY, 1),
+    MINT_MAINNET_COPY_LIVE_ENABLED: bool(process.env.MINT_MAINNET_COPY_LIVE_ENABLED, false),
+    MINT_MAINNET_PRIVATE_RELAY_ENABLED: bool(process.env.MINT_MAINNET_PRIVATE_RELAY_ENABLED, false),
+    MINT_MAINNET_AUTO_REPLACE_ENABLED: bool(process.env.MINT_MAINNET_AUTO_REPLACE_ENABLED, false),
+    MINT_MAINNET_REQUIRE_MANUAL_CONFIRMATION: bool(process.env.MINT_MAINNET_REQUIRE_MANUAL_CONFIRMATION, true),
+    /** Preferred beta scoping (falls back to legacy `MINT_MAINNET_BETA_*` names). */
+    MINT_MAINNET_BETA_GUILD_ID: (process.env.MINT_MAINNET_BETA_GUILD_ID || '').trim(),
+    MINT_MAINNET_BETA_USER_ID: (process.env.MINT_MAINNET_BETA_USER_ID || '').trim(),
+    MINT_MAINNET_BETA_WALLET: (process.env.MINT_MAINNET_BETA_WALLET || '').trim().toLowerCase(),
+    /** Operator must explicitly approve external signer for mainnet live. */
+    MINT_MAINNET_SIGNER_APPROVED: bool(process.env.MINT_MAINNET_SIGNER_APPROVED, false),
+    MINT_MAINNET_LOCAL_DEV_SIGNER_APPROVED: bool(process.env.MINT_MAINNET_LOCAL_DEV_SIGNER_APPROVED, false),
+    MINT_JOB_MAX_AGE_MINUTES: num(process.env.MINT_JOB_MAX_AGE_MINUTES, 120),
 };
+
+/** HTTPS JSON-RPC for Ethereum mainnet (required for mainnet dry-run / live). */
+export function resolveMainnetRpcUrl(): string | null {
+    const u = process.env.MINT_MAINNET_RPC_URL?.trim();
+    return u || null;
+}
+
+export function isMintAdminDiscordId(discordId: string): boolean {
+    const id = discordId.trim();
+    return id.length > 0 && mintEnv.MINT_ADMIN_DISCORD_IDS.includes(id);
+}
 
 /** Required for live execution path when enforcing gas / cost caps. */
 export function mintGasCapsConfigured(): boolean {
@@ -82,4 +121,16 @@ export function isLiveEngineMode(): boolean {
 
 export function isPrepareEngineMode(): boolean {
     return mintEnv.MINT_ENGINE_MODE === 'prepare';
+}
+
+export function resolvedMainnetBetaGuildDiscordId(): string {
+    return (mintEnv.MINT_MAINNET_BETA_GUILD_ID || mintEnv.MINT_MAINNET_BETA_GUILD_DISCORD_ID || '').trim();
+}
+
+export function resolvedMainnetBetaUserDiscordId(): string {
+    return (mintEnv.MINT_MAINNET_BETA_USER_ID || mintEnv.MINT_MAINNET_BETA_USER_DISCORD_ID || '').trim();
+}
+
+export function resolvedMainnetBetaWalletAddress(): string {
+    return (mintEnv.MINT_MAINNET_BETA_WALLET || mintEnv.MINT_MAINNET_BETA_WALLET_ADDRESS || '').trim().toLowerCase();
 }

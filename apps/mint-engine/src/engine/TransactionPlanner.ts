@@ -4,7 +4,7 @@ import type { ResolvedDrop } from './mintTypes';
 import { canonicalStringify } from './canonicalJson';
 import { TransactionBuilder, defaultFeeRecipient } from './TransactionBuilder';
 
-export type ExecutionMode = 'simulation' | 'prepare' | 'live';
+export type ExecutionMode = 'simulation' | 'prepare' | 'live' | 'mainnet_dry_run';
 
 export interface MintPlan {
     chainId: number;
@@ -115,9 +115,11 @@ export class TransactionPlanner {
         }
 
         const mode: ExecutionMode =
-            args.executionMode === 'prepare' || args.executionMode === 'live' || args.executionMode === 'simulation'
-                ? args.executionMode
-                : 'simulation';
+            args.executionMode === 'mainnet_dry_run'
+                ? 'live'
+                : args.executionMode === 'prepare' || args.executionMode === 'live' || args.executionMode === 'simulation'
+                  ? args.executionMode
+                  : 'simulation';
 
         const plan: MintPlan = {
             chainId: args.chainId,

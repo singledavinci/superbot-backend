@@ -18,6 +18,8 @@ const REQUIRED = [
     'TrackedMintTrigger',
     'MintProviderHealth',
     'MintMainnetReadiness',
+    'MainnetExecutionApproval',
+    'MintEngineRuntimeState',
 ];
 
 async function main(): Promise<void> {

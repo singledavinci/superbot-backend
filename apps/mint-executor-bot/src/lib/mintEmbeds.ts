@@ -1,7 +1,7 @@
 import { EmbedBuilder } from 'discord.js';
 
 const DISCLAIMER =
-    'Not financial advice. Mint success not guaranteed. Never share seed phrases or private keys. No signing or broadcast from this command.';
+    'Execution tools are automation-based and not financial advice. Mint success is not guaranteed. Never share seed phrases or private keys. Transactions may fail or cost gas.';
 
 function str(v: unknown): string {
     if (v === null || v === undefined) return '—';

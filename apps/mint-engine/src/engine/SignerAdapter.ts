@@ -32,8 +32,10 @@ export class SignerAdapter {
         mode: SignerMode;
         unsigned: UnsignedTx;
         chainId: number;
+        /** DB/runtime emergency OR env (caller should pass effective value). */
+        emergencyStopActive?: boolean;
     }): Promise<{ ok: true; rawTransaction: string } | { ok: false; code: string; message: string }> {
-        if (mintEnv.MINT_EMERGENCY_STOP) {
+        if (mintEnv.MINT_EMERGENCY_STOP || args.emergencyStopActive) {
             return { ok: false, code: 'EXECUTION_EMERGENCY_STOP', message: 'Emergency stop enabled' };
         }
         if (!isLiveEngineMode()) {
@@ -47,8 +49,8 @@ export class SignerAdapter {
         }
 
         if (args.mode === 'local-dev-signer') {
-            if (isMainnetChain(args.chainId)) {
-                return { ok: false, code: 'SIGNER_MAINNET_FORBIDDEN', message: 'local-dev-signer cannot sign chainId 1' };
+            if (isMainnetChain(args.chainId) && !mintEnv.MINT_MAINNET_LOCAL_DEV_SIGNER_APPROVED) {
+                return { ok: false, code: 'MAINNET_SIGNER_NOT_APPROVED', message: 'local-dev mainnet requires MINT_MAINNET_LOCAL_DEV_SIGNER_APPROVED=true' };
             }
             if (!this.localDevSignerAllowed()) {
                 return { ok: false, code: 'SIGNER_FORBIDDEN', message: 'local-dev-signer not allowed in this environment' };
@@ -76,6 +78,9 @@ export class SignerAdapter {
         }
 
         if (args.mode === 'external-signer') {
+            if (args.chainId === 1 && !mintEnv.MINT_MAINNET_SIGNER_APPROVED) {
+                return { ok: false, code: 'MAINNET_SIGNER_NOT_APPROVED', message: 'Set MINT_MAINNET_SIGNER_APPROVED=true for mainnet external signer' };
+            }
             const url = process.env.MINT_EXTERNAL_SIGNER_URL?.trim();
             if (!url) return { ok: false, code: 'SIGNER_NOT_CONFIGURED', message: 'MINT_EXTERNAL_SIGNER_URL missing' };
             if (!mintEnv.MINT_ENGINE_SERVICE_SECRET) {

@@ -7,7 +7,10 @@ import { ClockSyncMonitor } from '../engine/ClockSyncMonitor';
 import { SignerAdapter } from '../engine/SignerAdapter';
 import { ProviderHealthManager } from '../engine/ProviderHealthManager';
 import { CopyMintEngine } from '../engine/CopyMintEngine';
-import { mintEnv } from '../config/mintEnv';
+import { mintEnv, isMintAdminDiscordId, resolvedMainnetBetaWalletAddress } from '../config/mintEnv';
+import { getEffectiveEmergencyStop, setRuntimeEmergencyStop } from '../engine/emergencyRuntime';
+import { mergeMintJobMetadataJson } from '../engine/mintJobPreflightPersist';
+import { AuditLogService } from '../engine/AuditLogService';
 
 let mintJobsTotal = 0;
 let mintJobsSucceeded = 0;
@@ -42,12 +45,38 @@ export function registerMintRoutes(
             take: 5,
             select: { id: true, errorCode: true, updatedAt: true },
         });
+        const effectiveEmergency = await getEffectiveEmergencyStop(deps.prisma);
+        const activeMainnetStatuses = [
+            'created',
+            'preflight_running',
+            'preflight_passed',
+            'nonce_locked',
+            'submitted',
+            'pending_confirmation',
+            'dry_run_running',
+        ];
+        const activeMainnetJobCount = await deps.prisma.mintJob.count({
+            where: { chainId: 1, status: { in: activeMainnetStatuses } },
+        });
+        const signerMode = signer.resolveMode();
+        const signerMainnetApproved =
+            mintEnv.MINT_MAINNET_SIGNER_APPROVED ||
+            (signerMode === 'local-dev-signer' && mintEnv.MINT_MAINNET_LOCAL_DEV_SIGNER_APPROVED);
         res.json({
             engineMode: mintEnv.MINT_ENGINE_MODE,
             liveExecutionEnabled: mintEnv.MINT_EXECUTION_ENABLED,
             mainnetBroadcastEnabled: mintEnv.MINT_MAINNET_BROADCAST_ENABLED,
+            mainnetBetaEnabled: mintEnv.MINT_MAINNET_BETA,
             defaultChainId: mintEnv.MINT_DEFAULT_CHAIN_ID,
-            emergencyStop: mintEnv.MINT_EMERGENCY_STOP,
+            emergencyStopEnv: mintEnv.MINT_EMERGENCY_STOP,
+            emergencyStopEffective: effectiveEmergency,
+            mainnetDryRunEnabled: mintEnv.MINT_MAINNET_DRY_RUN,
+            mainnetBetaWalletConfigured: Boolean(resolvedMainnetBetaWalletAddress()),
+            mainnetMaxActiveJobs: mintEnv.MINT_MAINNET_MAX_ACTIVE_JOBS,
+            mainnetMaxQuantity: mintEnv.MINT_MAINNET_MAX_QUANTITY,
+            activeMainnetJobCount,
+            signerMode,
+            signerMainnetApproved,
             testnetOnly: mintEnv.MINT_TESTNET_ONLY,
             signerConfigured: signer.signerConfigured(),
             rpcHealth: healthRows,
@@ -67,7 +96,7 @@ export function registerMintRoutes(
         const b = req.body as Record<string, unknown>;
         const execRaw = b.executionMode != null ? String(b.executionMode) : undefined;
         const execMode =
-            execRaw === 'prepare' || execRaw === 'simulation' || execRaw === 'live'
+            execRaw === 'prepare' || execRaw === 'simulation' || execRaw === 'live' || execRaw === 'mainnet_dry_run'
                 ? execRaw
                 : mintEnv.MINT_ENGINE_MODE === 'live'
                   ? 'prepare'
@@ -218,6 +247,193 @@ export function registerMintRoutes(
             data: { settings: { ...cur, mintEngine: mint } as object },
         });
         res.json({ ok: true });
+    });
+
+    r('/runtime/emergency-stop', async (req, res) => {
+        const b = req.body as Record<string, unknown>;
+        const adminDiscordId = String(b.adminDiscordId ?? b.userDiscordId ?? '');
+        if (!isMintAdminDiscordId(adminDiscordId)) {
+            res.status(403).json({ error: 'MINT_ADMIN_REQUIRED' });
+            return;
+        }
+        await setRuntimeEmergencyStop(deps.prisma, true);
+        res.json({ ok: true, emergencyStopEffective: true });
+    });
+
+    r('/runtime/emergency-resume', async (req, res) => {
+        const b = req.body as Record<string, unknown>;
+        const adminDiscordId = String(b.adminDiscordId ?? b.userDiscordId ?? '');
+        if (!isMintAdminDiscordId(adminDiscordId)) {
+            res.status(403).json({ error: 'MINT_ADMIN_REQUIRED' });
+            return;
+        }
+        await setRuntimeEmergencyStop(deps.prisma, false);
+        const effective = await getEffectiveEmergencyStop(deps.prisma);
+        res.json({ ok: true, emergencyStopEffective: effective });
+    });
+
+    r('/jobs/confirm-mainnet', async (req, res) => {
+        const b = req.body as Record<string, unknown>;
+        const adminDiscordId = String(b.adminDiscordId ?? b.userDiscordId ?? '');
+        if (!isMintAdminDiscordId(adminDiscordId)) {
+            res.status(403).json({ error: 'MINT_ADMIN_REQUIRED' });
+            return;
+        }
+        const jobId = String(b.jobId ?? '');
+        if (!jobId) {
+            res.status(400).json({ error: 'JOB_ID_REQUIRED' });
+            return;
+        }
+        const job = await deps.prisma.mintJob.findUnique({ where: { id: jobId } });
+        if (!job) {
+            res.status(404).json({ error: 'NOT_FOUND' });
+            return;
+        }
+        if (job.chainId !== 1 || job.executionMode !== 'live') {
+            res.status(400).json({ error: 'MAINNET_LIVE_JOB_REQUIRED' });
+            return;
+        }
+        await mergeMintJobMetadataJson(deps.prisma, jobId, {
+            mainnetConfirmed: true,
+            mainnetConfirmedAt: new Date().toISOString(),
+            mainnetConfirmedByDiscordId: adminDiscordId,
+        });
+        res.json({ ok: true, jobId });
+    });
+
+    r('/mainnet-approval/grant', async (req, res) => {
+        const audit = new AuditLogService(deps.prisma);
+        const b = req.body as Record<string, unknown>;
+        const adminDiscordId = String(b.adminDiscordId ?? '');
+        if (!isMintAdminDiscordId(adminDiscordId)) {
+            res.status(403).json({ error: 'MINT_ADMIN_REQUIRED' });
+            return;
+        }
+        const guildDiscordId = String(b.guildDiscordId ?? '');
+        const userDiscordId = String(b.userDiscordId ?? '');
+        const walletAddress = String(b.walletAddress ?? '').toLowerCase();
+        const maxFeePerGas = String(b.maxFeePerGas ?? '').trim();
+        const maxPriorityFeePerGas = String(b.maxPriorityFeePerGas ?? '').trim();
+        const maxTotalCostNative = String(b.maxTotalCostNative ?? '').trim();
+        const maxQuantity = Math.max(1, Math.floor(Number(b.maxQuantity ?? 1)));
+        const expiresAtRaw = String(b.expiresAt ?? '');
+        const approvedBy = String(b.approvedByDiscordId ?? adminDiscordId).trim();
+        const allowedCollections = b.allowedCollections;
+        if (!/^0x[a-f0-9]{40}$/i.test(walletAddress)) {
+            res.status(400).json({ error: 'INVALID_WALLET' });
+            return;
+        }
+        if (!maxFeePerGas || !maxPriorityFeePerGas || !maxTotalCostNative) {
+            res.status(400).json({ error: 'CAPS_REQUIRED' });
+            return;
+        }
+        const exp = new Date(expiresAtRaw);
+        if (!Number.isFinite(exp.getTime()) || exp <= new Date()) {
+            res.status(400).json({ error: 'INVALID_EXPIRY' });
+            return;
+        }
+        const guild = await deps.prisma.guild.findUnique({ where: { discordId: guildDiscordId } });
+        const user = await deps.prisma.user.findUnique({ where: { discordId: userDiscordId } });
+        if (!guild || !user) {
+            res.status(404).json({ error: 'NOT_FOUND' });
+            return;
+        }
+        const mw = await deps.prisma.mintWallet.findFirst({
+            where: { userId: user.id, address: walletAddress, chainId: 1 },
+        });
+        if (!mw) {
+            res.status(404).json({ error: 'MINT_WALLET_NOT_FOUND' });
+            return;
+        }
+        let collectionsJson: unknown = undefined;
+        if (allowedCollections != null) {
+            if (!Array.isArray(allowedCollections)) {
+                res.status(400).json({ error: 'ALLOWED_COLLECTIONS_INVALID' });
+                return;
+            }
+            collectionsJson = allowedCollections.map((x) => String(x).toLowerCase());
+        }
+        await deps.prisma.$transaction(async (tx) => {
+            await tx.mainnetExecutionApproval.updateMany({
+                where: {
+                    guildId: guild.id,
+                    userId: user.id,
+                    mintWalletId: mw.id,
+                    approvalStatus: 'active',
+                },
+                data: { approvalStatus: 'revoked' },
+            });
+            await tx.mainnetExecutionApproval.create({
+                data: {
+                    guildId: guild.id,
+                    userId: user.id,
+                    mintWalletId: mw.id,
+                    walletAddress,
+                    chainId: 1,
+                    approvedBy,
+                    approvalStatus: 'active',
+                    maxFeePerGas,
+                    maxPriorityFeePerGas,
+                    maxTotalCostNative,
+                    maxQuantity,
+                    allowedCollections: collectionsJson !== undefined ? (collectionsJson as object) : undefined,
+                    expiresAt: exp,
+                },
+            });
+        });
+        await audit.log({
+            guildId: guild.id,
+            userId: user.id,
+            action: 'mainnet_approval_grant',
+            status: 'active',
+            message: `Granted by discord ${adminDiscordId}`,
+            metadata: { walletAddress, expiresAt: exp.toISOString(), maxQuantity },
+        });
+        res.json({ ok: true });
+    });
+
+    r('/mainnet-approval/revoke', async (req, res) => {
+        const audit = new AuditLogService(deps.prisma);
+        const b = req.body as Record<string, unknown>;
+        const adminDiscordId = String(b.adminDiscordId ?? '');
+        if (!isMintAdminDiscordId(adminDiscordId)) {
+            res.status(403).json({ error: 'MINT_ADMIN_REQUIRED' });
+            return;
+        }
+        const guildDiscordId = String(b.guildDiscordId ?? '');
+        const userDiscordId = String(b.userDiscordId ?? '');
+        const walletAddress = String(b.walletAddress ?? '').toLowerCase();
+        const guild = await deps.prisma.guild.findUnique({ where: { discordId: guildDiscordId } });
+        const user = await deps.prisma.user.findUnique({ where: { discordId: userDiscordId } });
+        if (!guild || !user) {
+            res.status(404).json({ error: 'NOT_FOUND' });
+            return;
+        }
+        const mw = await deps.prisma.mintWallet.findFirst({
+            where: { userId: user.id, address: walletAddress, chainId: 1 },
+        });
+        if (!mw) {
+            res.status(404).json({ error: 'MINT_WALLET_NOT_FOUND' });
+            return;
+        }
+        const n = await deps.prisma.mainnetExecutionApproval.updateMany({
+            where: {
+                guildId: guild.id,
+                userId: user.id,
+                mintWalletId: mw.id,
+                approvalStatus: 'active',
+            },
+            data: { approvalStatus: 'revoked' },
+        });
+        await audit.log({
+            guildId: guild.id,
+            userId: user.id,
+            action: 'mainnet_approval_revoke',
+            status: 'revoked',
+            message: `Revoked by discord ${adminDiscordId}`,
+            metadata: { walletAddress, count: n.count },
+        });
+        res.json({ ok: true, revoked: n.count });
     });
 
 }

@@ -11,7 +11,14 @@ export interface BroadcastResult {
 }
 
 export class BroadcastEngine {
-    async broadcastRaw(args: { rawTransaction: string; urls: string[] }): Promise<BroadcastResult[]> {
+    async broadcastRaw(args: {
+        rawTransaction: string;
+        urls: string[];
+        emergencyStopActive?: boolean;
+    }): Promise<BroadcastResult[]> {
+        if (mintEnv.MINT_EMERGENCY_STOP || args.emergencyStopActive) {
+            return [{ provider: 'policy', ok: false, latencyMs: 0, error: 'MAINNET_EMERGENCY_STOP_ACTIVE' }];
+        }
         let parsed: Transaction;
         try {
             parsed = Transaction.from(args.rawTransaction);
