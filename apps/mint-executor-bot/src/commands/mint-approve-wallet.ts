@@ -1,26 +1,35 @@
-import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { mintEnginePost } from '../lib/mintHttp';
-import { isTrustMintAdmin } from '../lib/mintAdmin';
-
-const FOOTER =
-    'Execution tools are automation-based and not financial advice. Mint success is not guaranteed. Never share seed phrases or private keys. Transactions may fail or cost gas.';
 
 export const data = new SlashCommandBuilder()
     .setName('mint-approve-wallet')
-    .setDescription('Admin: grant mainnet execution approval with gas and cost caps')
-    .addUserOption(o => o.setName('user').setDescription('Discord user who owns the mint wallet').setRequired(true))
-    .addStringOption(o => o.setName('wallet').setDescription('Mint wallet address (0x…, mainnet)').setRequired(true))
-    .addStringOption(o => o.setName('max_fee_per_gas').setDescription('Max fee per gas cap (wei string)').setRequired(true))
-    .addStringOption(o =>
-        o.setName('max_priority_fee_per_gas').setDescription('Max priority fee cap (wei string)').setRequired(true),
+    .setDescription('Grant mainnet execution approval for one wallet (mint admins only)')
+    .addStringOption(o => o.setName('wallet').setDescription('Wallet address (0x…, chain 1)').setRequired(true))
+    .addUserOption(o =>
+        o.setName('target_user').setDescription('Discord user this approval is for (defaults to you)').setRequired(false),
     )
-    .addStringOption(o => o.setName('max_total_cost_native').setDescription('Max total native cost cap (wei string)').setRequired(true))
-    .addIntegerOption(o => o.setName('max_quantity').setDescription('Max mint quantity per job').setRequired(true))
-    .addStringOption(o => o.setName('expires_at').setDescription('Expiry ISO-8601 (e.g. 2026-12-31T23:59:59Z)').setRequired(true))
+    .addStringOption(o => o.setName('max_fee_per_gas').setDescription('Gas cap: maxFeePerGas (wei string, e.g. gwei decimal)').setRequired(true))
+    .addStringOption(o =>
+        o.setName('max_priority_fee_per_gas').setDescription('Gas cap: maxPriorityFeePerGas (wei string)').setRequired(true),
+    )
+    .addStringOption(o =>
+        o.setName('max_total_cost_native').setDescription('Max total native cost cap (decimal string, ETH units per engine env)').setRequired(true),
+    )
+    .addIntegerOption(o =>
+        o.setName('max_quantity').setDescription('Max mint quantity allowed by this approval').setRequired(false).setMinValue(1),
+    )
+    .addIntegerOption(o =>
+        o
+            .setName('expires_in_hours')
+            .setDescription('Approval validity from now (hours)')
+            .setRequired(false)
+            .setMinValue(1)
+            .setMaxValue(24 * 365),
+    )
     .addStringOption(o =>
         o
             .setName('allowed_collections')
-            .setDescription('Optional comma-separated collection addresses (empty = all allowed)')
+            .setDescription('Optional comma-separated collection 0x addresses; omit or empty = unrestricted')
             .setRequired(false),
     );
 
@@ -31,29 +40,35 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         await interaction.editReply('Use this command in a server.');
         return;
     }
-    if (!isTrustMintAdmin(interaction)) {
-        await interaction.editReply('Administrator permission and mint admin allow-list (if configured) required.');
-        return;
+
+    const walletRaw = interaction.options.getString('wallet', true).trim();
+    const walletAddress = walletRaw.toLowerCase();
+    const targetUser = interaction.options.getUser('target_user');
+    const userDiscordId = targetUser?.id ?? interaction.user.id;
+
+    const maxFeePerGas = interaction.options.getString('max_fee_per_gas', true).trim();
+    const maxPriorityFeePerGas = interaction.options.getString('max_priority_fee_per_gas', true).trim();
+    const maxTotalCostNative = interaction.options.getString('max_total_cost_native', true).trim();
+    const maxQuantity = interaction.options.getInteger('max_quantity') ?? 1;
+    const expiresInHours = interaction.options.getInteger('expires_in_hours') ?? 168;
+
+    const collectionsRaw = interaction.options.getString('allowed_collections')?.trim() ?? '';
+    let allowedCollections: string[] | undefined;
+    if (collectionsRaw.length > 0) {
+        const arr = collectionsRaw
+            .split(',')
+            .map(s => s.trim().toLowerCase())
+            .filter(Boolean);
+        if (arr.length > 0) allowedCollections = arr;
     }
-    const target = interaction.options.getUser('user', true);
-    const wallet = interaction.options.getString('wallet', true).toLowerCase();
-    const maxFeePerGas = interaction.options.getString('max_fee_per_gas', true);
-    const maxPriorityFeePerGas = interaction.options.getString('max_priority_fee_per_gas', true);
-    const maxTotalCostNative = interaction.options.getString('max_total_cost_native', true);
-    const maxQuantity = interaction.options.getInteger('max_quantity', true);
-    const expiresAt = interaction.options.getString('expires_at', true);
-    const allowedRaw = interaction.options.getString('allowed_collections');
-    const allowedCollections =
-        allowedRaw
-            ?.split(',')
-            .map((s) => s.trim().toLowerCase())
-            .filter((s) => s.length > 0) ?? undefined;
+
+    const expiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000).toISOString();
 
     const body: Record<string, unknown> = {
         adminDiscordId: interaction.user.id,
         guildDiscordId: gid,
-        userDiscordId: target.id,
-        walletAddress: wallet,
+        userDiscordId,
+        walletAddress,
         maxFeePerGas,
         maxPriorityFeePerGas,
         maxTotalCostNative,
@@ -61,15 +76,33 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         expiresAt,
         approvedByDiscordId: interaction.user.id,
     };
-    if (allowedCollections && allowedCollections.length > 0) {
+    if (allowedCollections !== undefined) {
         body.allowedCollections = allowedCollections;
     }
 
-    const res = await mintEnginePost('/mainnet-approval/grant', body);
-    const j = (await res.json()) as Record<string, unknown>;
-    const embed = new EmbedBuilder()
-        .setTitle('Mainnet approval')
-        .setDescription(res.ok ? '**Granted** (prior active rows for this wallet were revoked).' : JSON.stringify(j).slice(0, 3500))
-        .setFooter({ text: FOOTER });
-    await interaction.editReply({ embeds: [embed] });
+    let res: Response;
+    try {
+        res = await mintEnginePost('/mainnet-approval/grant', body);
+    } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await interaction.editReply(`Mint engine request failed: ${msg.slice(0, 500)}`);
+        return;
+    }
+
+    const text = await res.text();
+    if (!res.ok) {
+        await interaction.editReply(`Mint engine HTTP ${res.status}: ${text.slice(0, 500)}`);
+        return;
+    }
+
+    await interaction.editReply(
+        [
+            'Mainnet approval **granted**.',
+            `Wallet: \`${walletAddress}\``,
+            `User: <@${userDiscordId}>`,
+            `maxQuantity: **${maxQuantity}**`,
+            `expiresAt (UTC): **${expiresAt}**`,
+            'Gas/cost caps stored on server (not shown here).',
+        ].join('\n'),
+    );
 }

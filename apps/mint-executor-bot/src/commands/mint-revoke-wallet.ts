@@ -1,15 +1,13 @@
-import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { mintEnginePost } from '../lib/mintHttp';
-import { isTrustMintAdmin } from '../lib/mintAdmin';
-
-const FOOTER =
-    'Execution tools are automation-based and not financial advice. Mint success is not guaranteed. Never share seed phrases or private keys. Transactions may fail or cost gas.';
 
 export const data = new SlashCommandBuilder()
     .setName('mint-revoke-wallet')
-    .setDescription('Admin: revoke active mainnet execution approval for a wallet')
-    .addUserOption(o => o.setName('user').setDescription('Discord user who owns the mint wallet').setRequired(true))
-    .addStringOption(o => o.setName('wallet').setDescription('Mint wallet address (0x…)').setRequired(true));
+    .setDescription('Revoke active mainnet approval for a wallet (mint admins only)')
+    .addStringOption(o => o.setName('wallet').setDescription('Wallet address (0x…, chain 1)').setRequired(true))
+    .addUserOption(o =>
+        o.setName('target_user').setDescription('Discord user whose approval to revoke (defaults to you)').setRequired(false),
+    );
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
@@ -18,23 +16,38 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         await interaction.editReply('Use this command in a server.');
         return;
     }
-    if (!isTrustMintAdmin(interaction)) {
-        await interaction.editReply('Administrator permission and mint admin allow-list (if configured) required.');
-        return;
-    }
-    const target = interaction.options.getUser('user', true);
-    const wallet = interaction.options.getString('wallet', true).toLowerCase();
 
-    const res = await mintEnginePost('/mainnet-approval/revoke', {
+    const walletAddress = interaction.options.getString('wallet', true).trim().toLowerCase();
+    const targetUser = interaction.options.getUser('target_user');
+    const userDiscordId = targetUser?.id ?? interaction.user.id;
+
+    const body = {
         adminDiscordId: interaction.user.id,
         guildDiscordId: gid,
-        userDiscordId: target.id,
-        walletAddress: wallet,
-    });
-    const j = (await res.json()) as Record<string, unknown>;
-    const embed = new EmbedBuilder()
-        .setTitle('Mainnet approval revoke')
-        .setDescription(res.ok ? `Revoked rows: **${String(j.revoked ?? '—')}**` : JSON.stringify(j).slice(0, 3500))
-        .setFooter({ text: FOOTER });
-    await interaction.editReply({ embeds: [embed] });
+        userDiscordId,
+        walletAddress,
+    };
+
+    let res: Response;
+    try {
+        res = await mintEnginePost('/mainnet-approval/revoke', body);
+    } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await interaction.editReply(`Mint engine request failed: ${msg.slice(0, 500)}`);
+        return;
+    }
+
+    const text = await res.text();
+    if (!res.ok) {
+        await interaction.editReply(`Mint engine HTTP ${res.status}: ${text.slice(0, 500)}`);
+        return;
+    }
+
+    try {
+        const j = JSON.parse(text) as Record<string, unknown>;
+        const n = j.revoked;
+        await interaction.editReply(`Mainnet approval revoke processed (revoked approvals: **${String(n ?? '?')}**).`);
+    } catch {
+        await interaction.editReply('Mainnet approval **revoke** acknowledged.');
+    }
 }

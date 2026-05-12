@@ -1,27 +1,40 @@
-import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
+import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.js';
 import { mintEnginePost } from '../lib/mintHttp';
-import { isTrustMintAdmin } from '../lib/mintAdmin';
-
-const FOOTER =
-    'Execution tools are automation-based and not financial advice. Mint success is not guaranteed. Never share seed phrases or private keys. Transactions may fail or cost gas.';
 
 export const data = new SlashCommandBuilder()
     .setName('mint-emergency-resume')
-    .setDescription('Admin: clear DB-backed mint emergency stop (env stop may still apply)');
+    .setDescription('Clear mint-engine runtime emergency stop (mint admins only)');
 
 export async function execute(interaction: ChatInputCommandInteraction): Promise<void> {
     await interaction.deferReply({ ephemeral: true });
-    if (!isTrustMintAdmin(interaction)) {
-        await interaction.editReply('Administrator permission and mint admin allow-list (if configured) required.');
+    if (!interaction.guildId) {
+        await interaction.editReply('Use this command in a server.');
         return;
     }
-    const res = await mintEnginePost('/runtime/emergency-resume', {
-        adminDiscordId: interaction.user.id,
-    });
-    const j = (await res.json()) as Record<string, unknown>;
-    const embed = new EmbedBuilder()
-        .setTitle('Mint emergency resume')
-        .setDescription(res.ok ? `Effective emergency stop: **${String(j.emergencyStopEffective ?? '—')}**` : `HTTP ${res.status}`)
-        .setFooter({ text: FOOTER });
-    await interaction.editReply({ embeds: [embed] });
+
+    const adminDiscordId = interaction.user.id;
+    const body = { adminDiscordId, userDiscordId: adminDiscordId };
+
+    let res: Response;
+    try {
+        res = await mintEnginePost('/runtime/emergency-resume', body);
+    } catch (e: unknown) {
+        const msg = e instanceof Error ? e.message : String(e);
+        await interaction.editReply(`Mint engine request failed: ${msg.slice(0, 500)}`);
+        return;
+    }
+
+    const text = await res.text();
+    if (!res.ok) {
+        await interaction.editReply(`Mint engine HTTP ${res.status}: ${text.slice(0, 500)}`);
+        return;
+    }
+
+    try {
+        const j = JSON.parse(text) as Record<string, unknown>;
+        const eff = j.emergencyStopEffective === true ? '**on**' : '**off**';
+        await interaction.editReply(`Runtime emergency stop cleared (effective emergency: ${eff}).`);
+    } catch {
+        await interaction.editReply(`Unexpected response: ${text.slice(0, 400)}`);
+    }
 }
