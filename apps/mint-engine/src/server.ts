@@ -3,7 +3,7 @@ import { prisma, connectDB } from '@superbot/database';
 import { redisConnection } from '@superbot/queue';
 import { resolveHttpRpcUrl, parseCommaSeparatedRpcUrls } from '@superbot/analytics';
 import { mintEnv } from './config/mintEnv';
-import { getEffectiveEmergencyStop } from './engine/emergencyRuntime';
+import { buildMintEngineHealthPayload } from './http/mintEngineHealthPayload';
 import { createHmacAuthMiddleware } from './http/serviceHmac';
 import { registerMintRoutes, registerMetricsRoute } from './http/mintRoutes';
 import { RecoveryWorker } from './engine/RecoveryWorker';
@@ -27,15 +27,18 @@ export async function startMintEngineHttp(): Promise<void> {
     const app = express();
 
     app.get('/health/mint-engine', async (_req, res) => {
-        const effectiveEmergency = await getEffectiveEmergencyStop(prisma);
-        res.json({
-            ok: true,
-            service: 'mint-engine',
-            mode: mintEnv.MINT_ENGINE_MODE,
-            executionEnabled: mintEnv.MINT_EXECUTION_ENABLED,
-            emergencyStopEnv: mintEnv.MINT_EMERGENCY_STOP,
-            emergencyStopEffective: effectiveEmergency,
-        });
+        try {
+            const payload = await buildMintEngineHealthPayload(prisma);
+            res.json(payload);
+        } catch (e: unknown) {
+            const msg = e instanceof Error ? e.message : String(e);
+            res.status(503).json({
+                ok: false,
+                service: 'mint-engine',
+                error: 'health_payload_failed',
+                message: msg.slice(0, 500),
+            });
+        }
     });
 
     app.get('/health/mint-providers', async (_req, res) => {

@@ -25,8 +25,20 @@ export function signMintRequest(args: {
     return createHmac('sha256', args.secret).update(msg, 'utf8').digest('hex');
 }
 
+export function mintEngineBaseUrl(): string {
+    return (process.env.MINT_ENGINE_URL || 'http://127.0.0.1:3847').replace(/\/+$/, '');
+}
+
+/** Public GET (no HMAC), e.g. `/health/mint-engine`. */
+export async function mintEngineGet(path: string): Promise<Response> {
+    const base = mintEngineBaseUrl();
+    const p = path.startsWith('/') ? path : `/${path}`;
+    const url = `${base}${p}`;
+    return fetch(url, { method: 'GET' });
+}
+
 export async function mintEnginePost(path: string, jsonBody: Record<string, unknown>): Promise<Response> {
-    const base = (process.env.MINT_ENGINE_URL || 'http://127.0.0.1:3847').replace(/\/+$/, '');
+    const base = mintEngineBaseUrl();
     const fullPath = `/v1/mint${path}`;
     const url = `${base}${fullPath}`;
     const secret = (process.env.MINT_ENGINE_SERVICE_SECRET || '').replace(/^\uFEFF/, '').trim();
