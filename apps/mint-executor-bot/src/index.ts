@@ -82,7 +82,15 @@ export class MintExecutorBot {
             const cmd = this.commands.get(interaction.commandName);
             if (!cmd) return;
             const name = interaction.commandName;
-            if (['mint-emergency-stop', 'mint-emergency-resume', 'mint-approve-wallet', 'mint-revoke-wallet'].includes(name)) {
+            if (
+                [
+                    'mint-emergency-stop',
+                    'mint-emergency-resume',
+                    'mint-approve-wallet',
+                    'mint-revoke-wallet',
+                    'mint-confirm-mainnet',
+                ].includes(name)
+            ) {
                 if (!isTrustMintAdmin(interaction)) {
                     await interaction.reply({
                         content: 'Administrator permission and mint admin allow-list (if configured) required.',
