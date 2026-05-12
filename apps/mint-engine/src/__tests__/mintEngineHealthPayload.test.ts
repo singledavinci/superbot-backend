@@ -4,6 +4,7 @@ import type { PrismaClient } from '@superbot/database';
 import { buildMintEngineHealthPayload } from '../http/mintEngineHealthPayload';
 
 const REQUIRED_KEYS = [
+    'healthSchemaVersion',
     'ok',
     'service',
     'mode',
@@ -38,6 +39,7 @@ describe('mintEngineHealthPayload', () => {
         assert.equal(p.service, 'mint-engine');
         assert.equal(typeof p.mode, 'string');
         assert.equal(typeof p.executionEnabled, 'boolean');
+        assert.equal(typeof p.healthSchemaVersion, 'number');
         assert.equal(typeof p.defaultChainId, 'number');
         assert.equal(typeof p.maxActiveJobs, 'number');
         assert.equal(typeof p.maxQuantity, 'number');

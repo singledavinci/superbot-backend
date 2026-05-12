@@ -29,6 +29,9 @@ export async function startMintEngineHttp(): Promise<void> {
     app.get('/health/mint-engine', async (_req, res) => {
         try {
             const payload = await buildMintEngineHealthPayload(prisma);
+            res.setHeader('Cache-Control', 'no-store, no-cache, must-revalidate');
+            res.setHeader('Pragma', 'no-cache');
+            res.setHeader('X-Mint-Engine-Health-Schema', String(payload.healthSchemaVersion));
             res.json(payload);
         } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);

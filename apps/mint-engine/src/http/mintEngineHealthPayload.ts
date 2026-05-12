@@ -5,6 +5,8 @@ import { SignerAdapter } from '../engine/SignerAdapter';
 
 /** Public-safe JSON for GET /health/mint-engine (no secrets, URLs, or keys). */
 export type MintEngineHealthPublicJson = {
+    /** Bump when the health contract changes (ops / deploy verification). */
+    healthSchemaVersion: number;
     ok: true;
     service: 'mint-engine';
     mode: string;
@@ -28,6 +30,7 @@ export async function buildMintEngineHealthPayload(prisma: PrismaClient): Promis
     const emergencyStop = await getEffectiveEmergencyStop(prisma);
     const signer = new SignerAdapter();
     return {
+        healthSchemaVersion: 2,
         ok: true,
         service: 'mint-engine',
         mode: mintEnv.MINT_ENGINE_MODE,

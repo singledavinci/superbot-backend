@@ -17,7 +17,7 @@
     "start:floor-worker": "SERVICE_TYPE=floor-worker node dist/src/index.js",
     "start:mint-engine": "SERVICE_TYPE=mint-engine node dist/src/index.js",
     "start:mint-executor-bot": "SERVICE_TYPE=mint-executor-bot node dist/src/index.js",
-    "build": "npx prisma generate --schema=packages/database/prisma/schema.prisma && tsc",
+    "build": "npx prisma generate --schema=packages/database/prisma/schema.prisma && tsc && node scripts/verify-mint-engine-dist.cjs",
     "db:identity": "node --require ts-node/register/transpile-only scripts/db-identity-check.ts",
     "db:verify-mint": "node --require ts-node/register/transpile-only scripts/verify-mint-tables.ts",
     "db:migrate": "node scripts/prisma-migrate-deploy.cjs",

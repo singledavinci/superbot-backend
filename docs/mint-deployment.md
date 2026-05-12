@@ -54,9 +54,17 @@ Point **`MINT_ENGINE_URL`** on the executor bot at that HTTPS origin (or use pri
 | `MINT_ENGINE_SERVICE_SECRET` | yes | **Same** value as mint-engine. |
 | `MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS` | optional | Default `false` on main bot (gates mint file commands). |
 
+### Start command (mint-engine service)
+
+Use **`npm run start:mint-engine`** so **`SERVICE_TYPE=mint-engine`** is always set from the script (Linux/macOS). Alternatively **`npm run start`** with **`SERVICE_TYPE=mint-engine`** defined in Railway variables.
+
+If **`SERVICE_TYPE`** is missing, the root router falls through to **MONOLITH** mode and **does not** run the mint-engine HTTP server — health checks may hit the wrong process or an outdated deployment.
+
 ### Build / lockfile
 
 Railway runs **`npm ci`**. After adding workspace packages (`apps/mint-engine`, `apps/mint-executor-bot`), run **`npm install`** locally and commit the updated **`package-lock.json`**.
+
+`npm run build` runs **`scripts/verify-mint-engine-dist.cjs`** after `tsc` so CI/Railway builds fail if the compiled mint-engine health module is missing from **`dist/`**.
 
 ## Database
 
@@ -127,6 +135,7 @@ Do **not** use `--skip-job` for the final “prepare-only beta” proof. See `do
 | Redis connection | `REDIS_URL` must be reachable from the service (internal vs public proxy). |
 | `npm ci` fails on Railway | `package-lock.json` out of sync with workspaces — run `npm install`, commit lockfile. |
 | Executor bot exits immediately | **`MINT_EXECUTOR_DISCORD_TOKEN`** missing or invalid. |
+| **`GET /health/mint-engine`** returns only ~5 fields (`mode`, `executionEnabled`, `emergencyStop`, …) | Deploy is **stale** or **wrong start command** — ensure **`npm run build`** succeeds (verify script passes), redeploy from **`master`**, use **`npm run start:mint-engine`** or set **`SERVICE_TYPE=mint-engine`**. A current deployment returns **`healthSchemaVersion`** **2** plus **`mainnetBroadcastEnabled`**, **`signerConfigured`**, etc., and response header **`X-Mint-Engine-Health-Schema: 2`**. |
 
 ## Verdict
 
