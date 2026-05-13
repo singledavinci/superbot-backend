@@ -2,7 +2,7 @@ import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.j
 import { mintEnginePost } from '../lib/mintHttp';
 
 export const data = new SlashCommandBuilder()
-    .setName('mint-revoke-wallet')
+    .setName('mint-revoke')
     .setDescription('Revoke active mainnet approval for a wallet (mint admins only)')
     .addStringOption(o => o.setName('wallet').setDescription('Wallet address (0x…, chain 1)').setRequired(true))
     .addUserOption(o =>

@@ -2,7 +2,7 @@ import { SlashCommandBuilder, type ChatInputCommandInteraction } from 'discord.j
 import { mintEnginePost } from '../lib/mintHttp';
 
 export const data = new SlashCommandBuilder()
-    .setName('mint-approve-wallet')
+    .setName('mint-approve')
     .setDescription('Grant mainnet execution approval for one wallet (mint admins only)')
     /** Discord requires every `.setRequired(true)` option before any optional option. */
     .addStringOption(o => o.setName('wallet').setDescription('Wallet address (0x…, chain 1)').setRequired(true))

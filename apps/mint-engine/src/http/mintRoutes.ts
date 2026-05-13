@@ -436,6 +436,58 @@ export function registerMintRoutes(
         res.json({ ok: true, revoked: n.count });
     });
 
+    r('/mainnet-approval/list', async (req, res) => {
+        const b = req.body as Record<string, unknown>;
+        const adminDiscordId = String(b.adminDiscordId ?? '');
+        if (!isMintAdminDiscordId(adminDiscordId)) {
+            res.status(403).json({ error: 'MINT_ADMIN_REQUIRED' });
+            return;
+        }
+        const guildDiscordId = String(b.guildDiscordId ?? '');
+        if (!guildDiscordId) {
+            res.status(400).json({ error: 'GUILD_REQUIRED' });
+            return;
+        }
+        const guild = await deps.prisma.guild.findUnique({ where: { discordId: guildDiscordId } });
+        if (!guild) {
+            res.status(404).json({ error: 'GUILD_NOT_FOUND' });
+            return;
+        }
+        const filterUserDiscordId = String(b.userDiscordId ?? '').trim();
+        const where: {
+            guildId: string;
+            approvalStatus: string;
+            expiresAt: { gt: Date };
+            user?: { discordId: string };
+        } = {
+            guildId: guild.id,
+            approvalStatus: 'active',
+            expiresAt: { gt: new Date() },
+        };
+        if (filterUserDiscordId) {
+            where.user = { discordId: filterUserDiscordId };
+        }
+        const rows = await deps.prisma.mainnetExecutionApproval.findMany({
+            where,
+            orderBy: { expiresAt: 'asc' },
+            take: 25,
+            include: { user: { select: { discordId: true } }, mintWallet: { select: { address: true } } },
+        });
+        res.json({
+            ok: true,
+            approvals: rows.map((row) => ({
+                id: row.id,
+                userDiscordId: row.user.discordId,
+                walletAddress: row.walletAddress,
+                chainId: row.chainId,
+                maxQuantity: row.maxQuantity,
+                expiresAt: row.expiresAt.toISOString(),
+                capsPresent: Boolean(row.maxFeePerGas && row.maxPriorityFeePerGas && row.maxTotalCostNative),
+                approvedBy: row.approvedBy,
+            })),
+        });
+    });
+
 }
 
 export function registerMetricsRoute(app: import('express').Express): void {

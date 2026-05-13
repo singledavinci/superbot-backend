@@ -105,8 +105,9 @@ export class MintExecutorBot {
                 [
                     'mint-emergency-stop',
                     'mint-emergency-resume',
-                    'mint-approve-wallet',
-                    'mint-revoke-wallet',
+                    'mint-approve',
+                    'mint-revoke',
+                    'mint-approvals',
                     'mint-confirm-mainnet',
                 ].includes(name)
             ) {

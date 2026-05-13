@@ -11,7 +11,7 @@ Recommended separate services (do **not** merge into the main intelligence bot):
 | Service | `SERVICE_TYPE` | Purpose |
 |---------|----------------|---------|
 | `superbot-mint-engine` | `mint-engine` | HTTP HMAC API: preflight, prepare, simulation; **no** signing/broadcast in prepare mode. |
-| `superbot-mint-executor-bot` | `mint-executor-bot` | Discord slash: `/mint-preflight`, `/mint-result`. |
+| `superbot-mint-executor-bot` | `mint-executor-bot` | Discord slash: `/mint-status`, `/mint-preflight`, `/mint-approve`, `/mint-revoke`, `/mint-approvals`, etc. |
 
 Existing intelligence stack (`bot`, `api`, `worker`, indexers, `floor-worker`) stays unchanged.
 
