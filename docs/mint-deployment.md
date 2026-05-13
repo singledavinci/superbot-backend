@@ -12,8 +12,36 @@ Recommended separate services (do **not** merge into the main intelligence bot):
 |---------|----------------|---------|
 | `superbot-mint-engine` | `mint-engine` | HTTP HMAC API: preflight, prepare, simulation; **no** signing/broadcast in prepare mode. |
 | `superbot-mint-executor-bot` | `mint-executor-bot` | Discord slash: `/mint-status`, `/mint-preflight`, `/mint-approve`, `/mint-revoke`, `/mint-approvals`, etc. |
+| `superbot-mint-external-signer` | *(none — standalone Node app)* | Tiny HTTPS service: `POST /` or `POST /sign` with HMAC + EIP-1559 signing (`apps/mint-external-signer`). **No** `SERVICE_TYPE`; no database. |
 
 Existing intelligence stack (`bot`, `api`, `worker`, indexers, `floor-worker`) stays unchanged.
+
+### External mint signer (Railway)
+
+Use this when mint-engine should call **`MINT_EXTERNAL_SIGNER_URL`** instead of holding a hot key. The HTTP contract matches `SignerAdapter` in `apps/mint-engine` (raw-body HMAC, `X-Mint-Plan-Hash`, JSON body with `planHash`, `chainId`, `unsigned`, optional `jobId`, `walletAddress`, `calldataHash`, `maxTotalCostNativeWei`).
+
+**Signer service (`superbot-mint-external-signer`)**
+
+- **Deploy:** Prefer GitHub deploy from `singledavinci/superbot-backend` with **Root directory** `apps/mint-external-signer`, **Build** `npm run build`, **Start** `node dist/index.js` (or `railway up ./apps/mint-external-signer --path-as-root` from a linked repo). Commit includes `apps/mint-external-signer/package-lock.json` so `npm ci` works when the build context is only that folder.
+- **Public URL:** Generate a Railway domain; mint-engine’s `MINT_EXTERNAL_SIGNER_URL` must be the **HTTPS origin** the engine can reach (e.g. `https://<service>-production.up.railway.app` — trailing path optional; engine `POST`s to the URL you configure).
+- **Routes:** `POST /` and `POST /sign` (same handler), `GET /health`.
+- **Variables (signer service):**
+  - `MINT_ENGINE_SERVICE_SECRET` — **same value as mint-engine** (recommended: Railway reference `${{ "superbot-mint-engine".MINT_ENGINE_SERVICE_SECRET }}` so rotation stays in sync).
+  - `SIGNER_PRIVATE_KEY` — **only** on this service; never commit or log.
+  - `PORT` — set by Railway in production.
+
+**Mint-engine variables (after signer URL exists)**
+
+| Variable | Notes |
+|----------|--------|
+| `MINT_EXTERNAL_SIGNER_URL` | Full HTTPS URL of the signer (same host the mint-engine process can call). |
+| `MINT_ENGINE_SERVICE_SECRET` | Must match the signer’s secret (byte-for-byte; trim BOM/whitespace). |
+| `MINT_SIGNER_ADDRESS` | `0x` + 20 bytes — **must** be the address derived from `SIGNER_PRIVATE_KEY`. Required for `signerConfigured: true`. |
+| `MINT_MAINNET_SIGNER_APPROVED` | Keep **`false`** until operations review; set **`true`** only when you intentionally allow mainnet signing through this external signer. |
+
+Redeploy **mint-engine** (and the signer if you change its env) after edits. HMAC failures (`401`), timeouts, or **`SIGNER_BAD_PAYLOAD`** on the engine side usually mean **secret mismatch** or **body bytes** not matching what was signed (do not re-serialize JSON for the MAC).
+
+**Verify:** `GET https://<mint-engine>/health/mint-signer` should move to `signerMode: "external-signer"` after `MINT_EXTERNAL_SIGNER_URL` is live and the engine has redeployed. With `MINT_SIGNER_ADDRESS` + `SIGNER_PRIVATE_KEY` set correctly, `signerConfigured` becomes **`true`** and `signerBlockReason` **`null`**. On Discord, **`/mint-status`** should align with that payload.
 
 ### Public URL (mint-engine)
 
@@ -142,6 +170,8 @@ Do **not** use `--skip-job` for the final “prepare-only beta” proof. See `do
 | `npm ci` fails on Railway | `package-lock.json` out of sync with workspaces — run `npm install`, commit lockfile. |
 | Executor bot exits immediately | **`MINT_EXECUTOR_DISCORD_TOKEN`** missing or invalid. |
 | **`GET /health/mint-engine`** returns only ~5 fields (`mode`, `executionEnabled`, `emergencyStop`, …) | Deploy is **stale** or **wrong start command** — ensure **`npm run build`** succeeds (verify script passes), redeploy from **`master`**, use **`npm run start:mint-engine`** or set **`SERVICE_TYPE=mint-engine`**. A current deployment returns **`healthSchemaVersion`** **2** plus **`mainnetBroadcastEnabled`**, **`signerConfigured`**, etc., and response header **`X-Mint-Engine-Health-Schema: 2`**. |
+| External signer: `signerBlockReason` **`SIGNER_ADDRESS_NOT_CONFIGURED`** | Set **`MINT_SIGNER_ADDRESS`** on mint-engine to the **`0x`** address of the wallet that owns **`SIGNER_PRIVATE_KEY`** on the signer service, then redeploy mint-engine. |
+| External signer: `401` / **`SIGNER_HTTP_ERROR`** / bad payload | Same **`MINT_ENGINE_SERVICE_SECRET`** on both sides; HMAC is over the **raw** JSON body bytes. Compare Railway variable reference vs literal secret. |
 
 ## Verdict
 

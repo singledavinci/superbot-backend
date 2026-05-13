@@ -16,6 +16,8 @@
     "start:market-indexer": "node scripts/run-service.cjs market-indexer",
     "start:floor-worker": "node scripts/run-service.cjs floor-worker",
     "start:mint-engine": "node scripts/run-service.cjs mint-engine",
+    "start:mint-external-signer": "npm run start -w @superbot/mint-external-signer",
+    "build:mint-external-signer": "npm run build -w @superbot/mint-external-signer",
     "start:mint-executor-bot": "node scripts/run-service.cjs mint-executor-bot",
     "build": "npx prisma generate --schema=packages/database/prisma/schema.prisma && node scripts/clean-dist.cjs && tsc && node scripts/verify-mint-engine-dist.cjs",
     "db:identity": "node --require ts-node/register/transpile-only scripts/db-identity-check.ts",
