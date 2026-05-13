@@ -51,7 +51,14 @@ export async function startMintEngineHttp(): Promise<void> {
 
     app.get('/health/mint-signer', (_req, res) => {
         const s = new SignerAdapter();
-        res.json({ ok: true, signerConfigured: s.signerConfigured() });
+        res.json({
+            ok: true,
+            signerConfigured: s.signerConfigured(),
+            signerMode: s.resolveMode(),
+            signerMainnetApproved: s.signerMainnetApproved(),
+            signerAddressMasked: s.signerAddressMasked(),
+            signerBlockReason: s.signerBlockReason(),
+        });
     });
 
     app.get('/health/mint-clock', async (_req, res) => {

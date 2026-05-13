@@ -32,5 +32,11 @@ if (!payloadSrc.includes('healthSchemaVersion')) {
 if (!payloadSrc.includes('runtimeEmergencyStopAvailable')) {
     fail('dist mintEngineHealthPayload.js missing runtimeEmergencyStopAvailable');
 }
+if (!payloadSrc.includes('signerMode')) {
+    fail('dist mintEngineHealthPayload.js missing signerMode');
+}
+if (!payloadSrc.includes('healthSchemaVersion: 3')) {
+    fail('dist mintEngineHealthPayload.js must use healthSchemaVersion 3');
+}
 
 console.log('[verify-mint-engine-dist] OK');

@@ -40,12 +40,23 @@ const REQUIRED_STATUS_KEYS: { label: string; keys: string[] }[] = [
     { label: 'emergencyStop', keys: ['emergencyStop', 'emergencyStopEffective'] },
     { label: 'testnetOnly', keys: ['testnetOnly'] },
     { label: 'signerConfigured', keys: ['signerConfigured'] },
+    { label: 'signerMode', keys: ['signerMode'] },
+    { label: 'signerMainnetApproved', keys: ['signerMainnetApproved'] },
+    { label: 'signerAddressMasked', keys: ['signerAddressMasked'] },
     { label: 'defaultChainId', keys: ['defaultChainId'] },
 ];
 
+/** True if any of `keys` exists on `j` (value may be `null` — counts as present for schema completeness). */
+export function statusKeyExists(j: Record<string, unknown>, keys: string[]): boolean {
+    for (const k of keys) {
+        if (Object.prototype.hasOwnProperty.call(j, k)) return true;
+    }
+    return false;
+}
+
 export function isMintHealthPayloadIncomplete(j: Record<string, unknown>): boolean {
     for (const { keys } of REQUIRED_STATUS_KEYS) {
-        if (pickStatusField(j, keys) === undefined) return true;
+        if (!statusKeyExists(j, keys)) return true;
     }
     return false;
 }
@@ -96,6 +107,9 @@ export function computeMainnetProofReadiness(j: Record<string, unknown>): { read
 
     const signer = strictBool(pickStatusField(j, ['signerConfigured']));
     if (signer !== true) blockers.push('signer not configured');
+
+    const signerMainnetOk = strictBool(pickStatusField(j, ['signerMainnetApproved']));
+    if (signer === true && signerMainnetOk !== true) blockers.push('signer not mainnet approved');
 
     const chain = strictNum(pickStatusField(j, ['defaultChainId']));
     if (chain !== 1) blockers.push(chain === undefined ? 'default chain id missing' : `default chain id is not 1 (got: ${formatStatusValue(chain)})`);
@@ -156,6 +170,15 @@ export function buildMintStatusDescription(
         `Runtime emergency DB: **${formatStatusValue(pickStatusField(j, ['runtimeEmergencyStopAvailable']))}**`,
         `Testnet only: **${formatStatusValue(pickStatusField(j, ['testnetOnly']))}**`,
         `Signer configured: **${formatStatusValue(pickStatusField(j, ['signerConfigured']))}**`,
+        `Signer mode: **${formatStatusValue(pickStatusField(j, ['signerMode']))}**`,
+        `Signer mainnet approved: **${formatStatusValue(pickStatusField(j, ['signerMainnetApproved']))}**`,
+        `Signer address (masked): **${formatStatusValue(pickStatusField(j, ['signerAddressMasked']))}**`,
+    ];
+    const sbr = pickStatusField(j, ['signerBlockReason']);
+    if (typeof sbr === 'string' && sbr.trim() !== '') {
+        lines.push(`Signer block reason: **${formatStatusValue(sbr)}**`);
+    }
+    lines.push(
         `Default chain id: **${formatStatusValue(pickStatusField(j, ['defaultChainId']))}**`,
         `Copy-mint live: **${formatStatusValue(pickStatusField(j, ['copyMintLiveEnabled']))}**`,
         `Private relay: **${formatStatusValue(pickStatusField(j, ['privateRelayEnabled']))}**`,
@@ -164,11 +187,11 @@ export function buildMintStatusDescription(
         `Max active jobs: **${formatStatusValue(pickStatusField(j, ['maxActiveJobs', 'mainnetMaxActiveJobs']))}**`,
         `Max quantity: **${formatStatusValue(pickStatusField(j, ['maxQuantity', 'mainnetMaxQuantity']))}**`,
         `Health schema: **${formatStatusValue(pickStatusField(j, ['healthSchemaVersion']))}**`,
-    ];
+    );
 
     const incomplete = isMintHealthPayloadIncomplete(j);
     if (incomplete) {
-        const missing = REQUIRED_STATUS_KEYS.filter(({ keys }) => pickStatusField(j, keys) === undefined).map((x) => x.label);
+        const missing = REQUIRED_STATUS_KEYS.filter(({ keys }) => !statusKeyExists(j, keys)).map((x) => x.label);
         lines.push(
             '',
             '**Status payload incomplete.** Do not run mainnet proof.',

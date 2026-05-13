@@ -63,6 +63,13 @@ export const mintEnv = {
     /** Optional `0x` + 40 hex: overrides default OpenSea CREATE2 SeaDrop minter for `seaDrop()`-less NFT resolution. */
     MINT_SEADROP_CANONICAL: (process.env.MINT_SEADROP_CANONICAL || '').replace(/^\uFEFF/, '').trim(),
 
+    /**
+     * Optional checksummed/lowercase `0x` + 40 hex: operator signing wallet for status display and binding checks.
+     * Required when `MINT_EXTERNAL_SIGNER_URL` is set (external signer considered configured only with a valid address).
+     * Never a private key.
+     */
+    MINT_SIGNER_ADDRESS: (process.env.MINT_SIGNER_ADDRESS || '').replace(/^\uFEFF/, '').trim().toLowerCase(),
+
     MINT_TESTNET_LIVE_VERIFIED_AT: process.env.MINT_TESTNET_LIVE_VERIFIED_AT || '',
 
     /** When true, `mainnet_dry_run` jobs resolve/simulate on mainnet RPC without sign/broadcast. */

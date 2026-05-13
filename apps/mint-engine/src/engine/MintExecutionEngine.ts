@@ -1272,6 +1272,11 @@ export class MintExecutionEngine {
             unsigned: unsignedWithNonce,
             chainId: job.chainId,
             emergencyStopActive: emergencySign,
+            jobId: mintJobId,
+            walletAddress: addr,
+            planWalletAddress: mat.plan.walletAddress.toLowerCase(),
+            calldataHash: keccak256(unsignedWithNonce.data),
+            maxTotalCostNativeWei: mat.plan.maxTotalCostNativeWei,
         });
 
         if (!signRes.ok) {

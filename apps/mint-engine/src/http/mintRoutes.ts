@@ -59,9 +59,7 @@ export function registerMintRoutes(
             where: { chainId: 1, status: { in: activeMainnetStatuses } },
         });
         const signerMode = signer.resolveMode();
-        const signerMainnetApproved =
-            mintEnv.MINT_MAINNET_SIGNER_APPROVED ||
-            (signerMode === 'local-dev-signer' && mintEnv.MINT_MAINNET_LOCAL_DEV_SIGNER_APPROVED);
+        const signerMainnetApproved = signer.signerMainnetApproved();
         res.json({
             engineMode: mintEnv.MINT_ENGINE_MODE,
             liveExecutionEnabled: mintEnv.MINT_EXECUTION_ENABLED,
@@ -77,6 +75,8 @@ export function registerMintRoutes(
             activeMainnetJobCount,
             signerMode,
             signerMainnetApproved,
+            signerAddressMasked: signer.signerAddressMasked(),
+            signerBlockReason: signer.signerBlockReason(),
             testnetOnly: mintEnv.MINT_TESTNET_ONLY,
             signerConfigured: signer.signerConfigured(),
             rpcHealth: healthRows,

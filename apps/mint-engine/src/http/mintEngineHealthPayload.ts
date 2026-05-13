@@ -19,6 +19,11 @@ export type MintEngineHealthPublicJson = {
     runtimeEmergencyStopAvailable: boolean;
     testnetOnly: boolean;
     signerConfigured: boolean;
+    signerMode: string;
+    signerMainnetApproved: boolean;
+    signerAddressMasked: string | null;
+    /** Present when signer is not fully configured (e.g. missing env); `null` when ok. */
+    signerBlockReason: string | null;
     defaultChainId: number;
     copyMintLiveEnabled: boolean;
     privateRelayEnabled: boolean;
@@ -47,7 +52,7 @@ export async function buildMintEngineHealthPayload(prisma: PrismaClient): Promis
 
     const signer = new SignerAdapter();
     return {
-        healthSchemaVersion: 2,
+        healthSchemaVersion: 3,
         ok: true,
         service: 'mint-engine',
         mode: mintEnv.MINT_ENGINE_MODE,
@@ -59,6 +64,10 @@ export async function buildMintEngineHealthPayload(prisma: PrismaClient): Promis
         runtimeEmergencyStopAvailable,
         testnetOnly: mintEnv.MINT_TESTNET_ONLY,
         signerConfigured: signer.signerConfigured(),
+        signerMode: signer.resolveMode(),
+        signerMainnetApproved: signer.signerMainnetApproved(),
+        signerAddressMasked: signer.signerAddressMasked(),
+        signerBlockReason: signer.signerBlockReason(),
         defaultChainId: mintEnv.MINT_DEFAULT_CHAIN_ID,
         copyMintLiveEnabled: mintEnv.MINT_MAINNET_COPY_LIVE_ENABLED,
         privateRelayEnabled: mintEnv.MINT_MAINNET_PRIVATE_RELAY_ENABLED,

@@ -9,6 +9,7 @@ import {
     formatStatusValue,
     isMintHealthPayloadIncomplete,
     pickStatusField,
+    statusKeyExists,
 } from '../lib/mintStatusDisplay';
 
 describe('mintStatusDisplay', () => {
@@ -33,12 +34,15 @@ describe('mintStatusDisplay', () => {
                 emergencyStopEffective: false,
                 testnetOnly: false,
                 signerConfigured: true,
+                signerMode: 'simulation-only',
+                signerMainnetApproved: false,
+                signerAddressMasked: null,
                 defaultChainId: 1,
                 mainnetBetaEnabled: true,
                 mainnetDryRunEnabled: false,
                 mainnetMaxActiveJobs: 1,
                 mainnetMaxQuantity: 1,
-                healthSchemaVersion: 2,
+                healthSchemaVersion: 3,
                 runtimeEmergencyStopAvailable: true,
                 copyMintLiveEnabled: false,
                 privateRelayEnabled: false,
@@ -60,7 +64,7 @@ describe('mintStatusDisplay', () => {
     it('renders real values from a full health payload', () => {
         const desc = buildMintStatusDescription(
             {
-                healthSchemaVersion: 2,
+                healthSchemaVersion: 3,
                 runtimeEmergencyStopAvailable: true,
                 mode: 'live',
                 executionEnabled: true,
@@ -68,6 +72,9 @@ describe('mintStatusDisplay', () => {
                 emergencyStop: false,
                 testnetOnly: false,
                 signerConfigured: false,
+                signerMode: 'simulation-only',
+                signerMainnetApproved: false,
+                signerAddressMasked: null,
                 defaultChainId: 1,
                 mainnetBeta: true,
                 mainnetDryRun: true,
@@ -83,8 +90,9 @@ describe('mintStatusDisplay', () => {
         assert.ok(desc.includes('Mode: **live**'));
         assert.ok(desc.includes('Mainnet beta: **true**'));
         assert.ok(desc.includes('Max quantity: **1**'));
-        assert.ok(desc.includes('Health schema: **2**'));
+        assert.ok(desc.includes('Health schema: **3**'));
         assert.ok(desc.includes('Signer configured: **false**'));
+        assert.ok(desc.includes('Signer mode: **simulation-only**'));
         assert.ok(desc.includes('Mainnet proof readiness: **not ready**'));
         assert.ok(desc.includes('First blocker: **signer not configured**'));
         assert.ok(!desc.includes('undefined'));
@@ -108,12 +116,15 @@ describe('mintStatusDisplay', () => {
                 emergencyStop: false,
                 testnetOnly: false,
                 signerConfigured: true,
+                signerMode: 'external-signer',
+                signerMainnetApproved: true,
+                signerAddressMasked: '0xaaaa...bbbb',
                 defaultChainId: 1,
                 maxActiveJobs: 1,
                 maxQuantity: 1,
                 copyMintLiveEnabled: false,
                 privateRelayEnabled: false,
-                healthSchemaVersion: 2,
+                healthSchemaVersion: 3,
                 runtimeEmergencyStopAvailable: true,
                 mainnetDryRun: false,
                 autoReplaceEnabled: false,
@@ -127,7 +138,7 @@ describe('mintStatusDisplay', () => {
 
     it('mainnet proof ready only when every gate passes', () => {
         const readyPayload = {
-            healthSchemaVersion: 2,
+            healthSchemaVersion: 3,
             runtimeEmergencyStopAvailable: true,
             mode: 'live',
             executionEnabled: true,
@@ -137,6 +148,9 @@ describe('mintStatusDisplay', () => {
             emergencyStop: false,
             testnetOnly: false,
             signerConfigured: true,
+            signerMode: 'external-signer',
+            signerMainnetApproved: true,
+            signerAddressMasked: '0x1111...2222',
             defaultChainId: 1,
             maxActiveJobs: 1,
             maxQuantity: 1,
@@ -152,6 +166,40 @@ describe('mintStatusDisplay', () => {
         assert.ok(desc.includes('Mainnet proof readiness: **ready**'));
     });
 
+    it('mainnet proof not ready when signer configured but not mainnet approved', () => {
+        const j = {
+            healthSchemaVersion: 3,
+            runtimeEmergencyStopAvailable: true,
+            mode: 'live',
+            executionEnabled: true,
+            mainnetBroadcastEnabled: true,
+            mainnetBeta: true,
+            mainnetDryRun: false,
+            emergencyStop: false,
+            testnetOnly: false,
+            signerConfigured: true,
+            signerMode: 'external-signer',
+            signerMainnetApproved: false,
+            signerAddressMasked: '0xabcd...ef01',
+            copyMintLiveEnabled: false,
+            privateRelayEnabled: false,
+            autoReplaceEnabled: false,
+            manualConfirmationRequired: true,
+            defaultChainId: 1,
+            maxActiveJobs: 1,
+            maxQuantity: 1,
+        };
+        const r = computeMainnetProofReadiness(j);
+        assert.equal(r.ready, false);
+        assert.equal(r.blockers[0], 'signer not mainnet approved');
+        const desc = buildMintStatusDescription(j, { postStatusMerge: 'used' });
+        assert.ok(desc.includes('First blocker: **signer not mainnet approved**'));
+    });
+
+    it('statusKeyExists treats null as present', () => {
+        assert.equal(statusKeyExists({ signerAddressMasked: null }, ['signerAddressMasked']), true);
+    });
+
     it('isMintHealthPayloadIncomplete detects missing required keys', () => {
         assert.equal(isMintHealthPayloadIncomplete({ mode: 'live' }), true);
         assert.equal(
@@ -163,6 +211,9 @@ describe('mintStatusDisplay', () => {
                 emergencyStop: false,
                 testnetOnly: false,
                 signerConfigured: true,
+                signerMode: 'external-signer',
+                signerMainnetApproved: true,
+                signerAddressMasked: '0x0000...0001',
                 defaultChainId: 1,
             }),
             false,

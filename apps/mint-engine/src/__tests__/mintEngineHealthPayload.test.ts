@@ -16,6 +16,10 @@ const REQUIRED_KEYS = [
     'runtimeEmergencyStopAvailable',
     'testnetOnly',
     'signerConfigured',
+    'signerMode',
+    'signerMainnetApproved',
+    'signerAddressMasked',
+    'signerBlockReason',
     'defaultChainId',
     'copyMintLiveEnabled',
     'privateRelayEnabled',
@@ -41,11 +45,15 @@ describe('mintEngineHealthPayload', () => {
         assert.equal(typeof p.mode, 'string');
         assert.equal(typeof p.executionEnabled, 'boolean');
         assert.equal(typeof p.healthSchemaVersion, 'number');
-        assert.equal(p.healthSchemaVersion, 2);
+        assert.equal(p.healthSchemaVersion, 3);
         assert.equal(typeof p.defaultChainId, 'number');
         assert.equal(typeof p.maxActiveJobs, 'number');
         assert.equal(typeof p.maxQuantity, 'number');
         assert.equal(typeof p.runtimeEmergencyStopAvailable, 'boolean');
+        assert.equal(typeof p.signerMode, 'string');
+        assert.equal(typeof p.signerMainnetApproved, 'boolean');
+        assert.ok('signerAddressMasked' in p);
+        assert.ok('signerBlockReason' in p);
     });
 
     it('falls back to env emergency stop when prisma read fails', async () => {
