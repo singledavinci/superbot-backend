@@ -57,6 +57,7 @@ Point **`MINT_ENGINE_URL`** on the executor bot at that HTTPS origin (or use pri
 | `MINT_ENGINE_URL` | yes | Public HTTPS mint-engine URL or internal service URL. |
 | `MINT_ENGINE_SERVICE_SECRET` | yes | **Same** value as mint-engine. |
 | `MINT_EXECUTOR_GUILD_ID` | optional | Your Discord **server** snowflake. When set, slash commands are registered on that guild for **immediate** visibility while testing; **global** commands alone can take **up to ~1 hour** to appear everywhere. |
+| `MINT_EXECUTOR_REGISTER_GLOBAL_COMMANDS` | optional | When **`MINT_EXECUTOR_GUILD_ID`** is set, defaults to **not** registering **global** commands (avoids duplicate `/mint-*` in the picker from guild + global). Set to **`true`** only if you intentionally want both. |
 | `MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS` | optional | Reserved / mint-engine config; **SuperBot never registers `mint-*` slash commands** — mint UX is only on the mint-executor Discord application. |
 
 ### Start command (mint-engine service)
@@ -69,7 +70,7 @@ If **`SERVICE_TYPE`** is missing, the root router falls through to **MONOLITH** 
 
 Railway runs **`npm ci`**. After adding workspace packages (`apps/mint-engine`, `apps/mint-executor-bot`), run **`npm install`** locally and commit the updated **`package-lock.json`**.
 
-`npm run build` runs **`scripts/verify-mint-engine-dist.cjs`** after `tsc` so CI/Railway builds fail if the compiled mint-engine health module is missing from **`dist/`**.
+`npm run build` removes **`dist/`** first (`scripts/clean-dist.cjs`) then runs **`tsc`**, so renamed/removed sources do not leave stale compiled files (e.g. orphan `mint-approve-wallet.js` next to `mint-approve.js`). It then runs **`scripts/verify-mint-engine-dist.cjs`** so CI/Railway builds fail if the compiled mint-engine health module is missing from **`dist/`**.
 
 ## Database
 

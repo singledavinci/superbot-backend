@@ -1,5 +1,4 @@
 import * as dotenv from 'dotenv';
-import fs from 'fs';
 import path from 'path';
 import {
     Client,
@@ -8,16 +7,21 @@ import {
     GatewayIntentBits,
     REST,
     Routes,
-    type ChatInputCommandInteraction,
 } from 'discord.js';
 
 import { isTrustMintAdmin, isGuildAdministrator } from './lib/mintAdmin';
+import {
+    EXPECTED_MINT_EXECUTOR_COMMAND_NAMES,
+    loadMintExecutorCommandsFromDir,
+    mintExecutorSlashRegistrationBody,
+    type MintExecutorCommandModule,
+} from './lib/mintExecutorCommandLoader';
 
 dotenv.config();
 
 export class MintExecutorBot {
     private client: Client;
-    public commands: Collection<string, { data: { name: string; toJSON: () => unknown }; execute: (i: ChatInputCommandInteraction) => Promise<void> }>;
+    public commands: Collection<string, MintExecutorCommandModule>;
 
     constructor() {
         this.client = new Client({ intents: [GatewayIntentBits.Guilds] });
@@ -26,14 +30,11 @@ export class MintExecutorBot {
 
     private async loadCommands() {
         const dir = path.join(__dirname, 'commands');
-        if (!fs.existsSync(dir)) return;
-        const files = fs.readdirSync(dir).filter(f => (f.endsWith('.ts') || f.endsWith('.js')) && !f.endsWith('.d.ts'));
-        for (const file of files) {
-            const mod = await import(path.join(dir, file));
-            if (mod.data && mod.execute) {
-                this.commands.set(mod.data.name, mod);
-            }
-        }
+        const res = await loadMintExecutorCommandsFromDir({
+            commandsDir: dir,
+            log: line => console.log(line),
+        });
+        this.commands = res.commands;
     }
 
     async start() {
@@ -54,10 +55,9 @@ export class MintExecutorBot {
         this.client.once(Events.ClientReady, async c => {
             console.log(`[MintExecutorBot] Ready as ${c.user.tag} (application id=${c.application?.id ?? '?'})`);
             const rest = new REST({ version: '10' }).setToken(token);
-            const cmds = [...this.commands.values()];
-            const body = cmds.map(x => x.data.toJSON());
-            const names = cmds.map(x => x.data.name).sort();
-            console.log(`[MintExecutorBot] Loaded ${cmds.length} command(s): ${names.join(', ')}`);
+            const body = mintExecutorSlashRegistrationBody(this.commands);
+            const names = [...this.commands.keys()].sort();
+            console.log(`[MintExecutorBot] Loaded ${this.commands.size} command(s): ${names.join(', ')}`);
 
             const clientId = c.application?.id;
             if (!clientId || !body.length) {
@@ -80,6 +80,17 @@ export class MintExecutorBot {
             }
 
             const guildId = process.env.MINT_EXECUTOR_GUILD_ID?.trim();
+            /** When a guild is configured, skip global registration by default to avoid duplicate slash entries (guild + global). Set `MINT_EXECUTOR_REGISTER_GLOBAL_COMMANDS=true` to also push globals. */
+            const registerGlobal =
+                (process.env.MINT_EXECUTOR_REGISTER_GLOBAL_COMMANDS ?? '').toLowerCase() === 'true' || !guildId;
+
+            if (this.commands.size !== EXPECTED_MINT_EXECUTOR_COMMAND_NAMES.length) {
+                const missing = EXPECTED_MINT_EXECUTOR_COMMAND_NAMES.filter(n => !this.commands.has(n));
+                console.warn(
+                    `[MintExecutorBot] Expected ${EXPECTED_MINT_EXECUTOR_COMMAND_NAMES.length} commands but loaded ${this.commands.size}. Missing: ${missing.join(', ') || '(none)'}`,
+                );
+            }
+
             try {
                 if (guildId) {
                     await rest.put(Routes.applicationGuildCommands(clientId, guildId), { body });
@@ -87,10 +98,16 @@ export class MintExecutorBot {
                         `[MintExecutorBot] Registered ${body.length} guild command(s) for guild ${guildId} (visible in this server immediately)`,
                     );
                 }
-                await rest.put(Routes.applicationCommands(clientId), { body });
-                console.log(
-                    `[MintExecutorBot] Registered ${body.length} global command(s) — can take up to ~1 hour to show in every server`,
-                );
+                if (registerGlobal) {
+                    await rest.put(Routes.applicationCommands(clientId), { body });
+                    console.log(
+                        `[MintExecutorBot] Registered ${body.length} global command(s) — can take up to ~1 hour to show in every server`,
+                    );
+                } else {
+                    console.log(
+                        '[MintExecutorBot] Skipping global slash registration (MINT_EXECUTOR_GUILD_ID is set; guild commands are authoritative). Set MINT_EXECUTOR_REGISTER_GLOBAL_COMMANDS=true to also register globals.',
+                    );
+                }
             } catch (e) {
                 console.error('[MintExecutorBot] Slash command registration failed:', e);
             }
