@@ -768,10 +768,10 @@ export class SuperBot {
             return;
         }
 
-        const execMintInIntel = process.env.MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS === 'true';
         const commandFiles = fs.readdirSync(commandsPath).filter(file => {
             if (!(file.endsWith('.ts') || file.endsWith('.js')) || file.endsWith('.d.ts')) return false;
-            if (file.startsWith('mint-') && !execMintInIntel) return false;
+            /** Mint execution slash UX lives only in `apps/mint-executor-bot` (dedicated Discord app). Never register `mint-*` on SuperBot. */
+            if (file.startsWith('mint-')) return false;
             return true;
         });
         console.log(`[Debug] Found ${commandFiles.length} potential command files.`);

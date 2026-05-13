@@ -42,7 +42,7 @@ Point **`MINT_ENGINE_URL`** on the executor bot at that HTTPS origin (or use pri
 | `MINT_REQUIRE_SECURE_SIGNER` | recommended | `true` |
 | `MINT_COPY_PENDING_ENABLED` | recommended | `false` |
 | `MINT_ALLOW_PRIVATE_RELAY` | recommended | `false` |
-| `MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS` | recommended | `false` (main bot must not run mint execution UX). |
+| `MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS` | recommended | `false` (legacy name; **SuperBot does not register `mint-*` slash commands** — use the mint-executor Discord app only). |
 
 `PORT` is set by Railway; the engine binds **`PORT` first**, then `MINT_ENGINE_PORT`, default `3847` locally.
 
@@ -52,10 +52,12 @@ Point **`MINT_ENGINE_URL`** on the executor bot at that HTTPS origin (or use pri
 |----------|----------|--------|
 | `SERVICE_TYPE` | yes | `mint-executor-bot` |
 | `MINT_EXECUTOR_DISCORD_TOKEN` | yes | **Dedicated** bot application token (do not reuse main `DISCORD_TOKEN`). |
+| `MINT_EXECUTOR_DISCORD_APPLICATION_ID` | recommended | Discord **Application** snowflake for Supermint (Developer Portal → OAuth2). If set and the login token resolves to a different app id, slash registration is **skipped** so commands never attach to the wrong bot. |
+| `MINT_EXECUTOR_REGISTER_SLASH_COMMANDS` | optional | Default `true`. Set `false` to run the executor without touching Discord command registration. |
 | `MINT_ENGINE_URL` | yes | Public HTTPS mint-engine URL or internal service URL. |
 | `MINT_ENGINE_SERVICE_SECRET` | yes | **Same** value as mint-engine. |
 | `MINT_EXECUTOR_GUILD_ID` | optional | Your Discord **server** snowflake. When set, slash commands are registered on that guild for **immediate** visibility while testing; **global** commands alone can take **up to ~1 hour** to appear everywhere. |
-| `MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS` | optional | Default `false` on main bot (gates mint file commands). |
+| `MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS` | optional | Reserved / mint-engine config; **SuperBot never registers `mint-*` slash commands** — mint UX is only on the mint-executor Discord application. |
 
 ### Start command (mint-engine service)
 

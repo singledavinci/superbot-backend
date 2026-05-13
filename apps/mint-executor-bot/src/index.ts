@@ -45,9 +45,14 @@ export class MintExecutorBot {
             );
             process.exit(1);
         }
+        if (!process.env.MINT_EXECUTOR_DISCORD_TOKEN?.trim() && process.env.DISCORD_TOKEN?.trim()) {
+            console.warn(
+                '[MintExecutorBot] Using DISCORD_TOKEN fallback — if this is the main SuperBot token, mint slash commands will register on the wrong application. Set MINT_EXECUTOR_DISCORD_TOKEN to the Supermint bot token only.',
+            );
+        }
 
         this.client.once(Events.ClientReady, async c => {
-            console.log(`[MintExecutorBot] Ready as ${c.user.tag}`);
+            console.log(`[MintExecutorBot] Ready as ${c.user.tag} (application id=${c.application?.id ?? '?'})`);
             const rest = new REST({ version: '10' }).setToken(token);
             const cmds = [...this.commands.values()];
             const body = cmds.map(x => x.data.toJSON());
@@ -57,6 +62,20 @@ export class MintExecutorBot {
             const clientId = c.application?.id;
             if (!clientId || !body.length) {
                 console.warn('[MintExecutorBot] Skipping slash registration (missing application id or empty command list)');
+                return;
+            }
+
+            const expectedAppId = process.env.MINT_EXECUTOR_DISCORD_APPLICATION_ID?.trim();
+            if (expectedAppId && expectedAppId !== clientId) {
+                console.error(
+                    `[MintExecutorBot] Refusing slash registration: token application id=${clientId} does not match MINT_EXECUTOR_DISCORD_APPLICATION_ID=${expectedAppId} (wrong bot token?)`,
+                );
+                return;
+            }
+
+            const registerSlash = (process.env.MINT_EXECUTOR_REGISTER_SLASH_COMMANDS ?? 'true').toLowerCase() !== 'false';
+            if (!registerSlash) {
+                console.log('[MintExecutorBot] Skipping slash registration (MINT_EXECUTOR_REGISTER_SLASH_COMMANDS=false)');
                 return;
             }
 
