@@ -1,171 +1,189 @@
 # SuperBot / Supermint Mint Execution Readiness Report
 
-**Generated:** 2026-05-13 (repo + linked Railway snapshot)  
-**Repo HEAD:** `b55bd8898b581fde58940a362101a3de5381f02d` on `master`  
-**Git working tree:** clean (`master...origin/master` aligned at time of audit)
+**Report refreshed:** 2026-05-13  
+**Repository:** `master` @ **`9be835087331f10749022dacb251d49aabf32219`** (includes this document + prior mint fixes)  
+**Working tree:** clean vs `origin/master` at refresh time  
 
-This document is an **operator-facing audit**. It does **not** print secret values. **Production** truth for env vars and `/mint-status` lines must still be verified in **Railway** and **Discord** by the operator.
+This is an **operator audit**. **No secret values** are printed. **Production** env and **`/mint-status`** text must be confirmed in **Railway** and **Discord** by the operator.
 
 ---
 
 ## 1. Executive Summary
 
 **What the mint system is**  
-A controlled pipeline to **plan**, **simulate**, optionally **dry-run on mainnet RPC**, and under strict gates **broadcast** NFT mint–related transactions — with **auditing**, **nonce discipline**, and **admin-only** Discord controls.
+A **controlled** execution stack: **preflight**, **simulation**, optional **mainnet dry-run** (RPC without unsafe broadcast), and **live** mainnet only when **policy**, **caps**, **approvals**, **signer**, and **operator controls** all align — with **Prisma auditability**, **nonce locking**, and **emergency stop**.
 
-**What SuperBot (intelligence) does**  
-The main stack (`superbot-backend`, workers, indexers, etc.) focuses on **alerts**, **wallet/collection tracking**, **analytics**, and **opportunity-style signals**. **`mint-*` slash commands are intentionally not registered** on that Discord application; execution UX lives on **Supermint** only.
+**What SuperBot does**  
+The **intelligence** side: **alerts**, **wallet tracking**, **collection tracking**, **analytics**, **opportunity-style signals**. It does **not** own mint slash UX by design (`mint-*` is **not** loaded on `apps/bot`).
 
 **What Supermint / `mint-executor-bot` does**  
-A **separate Discord application** exposes mint-only slash commands (`/mint-status`, `/mint-preflight`, …). It calls **mint-engine** over HTTPS with **HMAC** for protected routes.
+A **separate Discord application** (Supermint) exposes **mint-only** slash commands. It calls **mint-engine** over HTTPS; protected routes use **HMAC** (`MINT_ENGINE_SERVICE_SECRET`).
 
-**What mint-engine does**  
-HTTP API (`/v1/mint/*` HMAC, public `GET /health/mint-engine`), **job lifecycle**, **preflight**, **policy / mainnet beta gates**, **signer adapter**, **nonce lock**, **broadcast**, **result tracking**, Prisma persistence.
+**Current stage**
 
-**Current stage (confirmed in thread + codebase)**  
+| Milestone | State |
+|-----------|--------|
+| **Built** | Yes — `npm run build` runs Prisma generate, **`clean-dist`**, `tsc`, **`verify-mint-engine-dist`**. |
+| **Deployed** | Linked **Railway** showed **mint-engine** and **mint-executor-bot** on Git commit **`9be8350`** with **`SUCCESS`** / **`RUNNING`** at last CLI check (re-verify after any deploy). |
+| **Commands restored** | Yes — **14** commands in `EXPECTED_MINT_EXECUTOR_COMMAND_NAMES` under `apps/mint-executor-bot/src/commands`. |
+| **Status working** | Yes — `/mint-status` uses merged **GET `/health/mint-engine`** + **POST `/v1/mint/status`**; **no `undefined`**; **readiness + first blocker** lines. |
+| **Mainnet proof** | **Not completed in this report** — requires operator evidence (signer, approvals, dry-run, optional self-transfer, tx/receipt proof). |
 
-| Area | State |
-|------|--------|
-| Built | Yes — monorepo builds (`npm run build` includes `clean-dist` + `verify-mint-engine-dist`). |
-| Deployed (linked Railway) | **mint-engine** and **mint-executor-bot** latest deployment meta showed **`b55bd88`** / `SUCCESS` / `RUNNING` at audit time. |
-| Commands restored | Yes — **14** canonical slash modules in source + `EXPECTED_MINT_EXECUTOR_COMMAND_NAMES`. |
-| `/mint-status` | Fixed — no `undefined`; readiness + blockers from merged health + POST `/status`. |
-| Mainnet proof | **Not claimed complete** in this document — requires operator evidence (signer, approvals, dry-run, tx proof). |
+**Current final verdict (exactly one)**
 
-**Current final verdict (pick one)**  
+**Status fixed; commands restored; signer configuration next**
 
-**Status fixed; commands restored; signer configuration next** — *unless* `/mint-status` already shows **`Signer configured: true`** and **Mainnet proof readiness: ready**; then advance to **wallet approval / dry-run** per the readiness line and gates below.
+If **`/mint-status`** already shows **`Signer configured: true`** and readiness moves on, the operator should re-pick the verdict from the remaining options (**wallet approval → dry-run → proof → beta live**) using the **First blocker** line as ground truth — this static document cannot know live prod signer state.
 
 ---
 
 ## 2. Architecture Overview
 
-### Main SuperBot intelligence path
+### Main SuperBot intelligence bot
 
-- Services such as **`superbot-backend`**, **`superbot-floor-worker`**, **`superbot-market-indexer`**, **`superbot-sales-indexer`**, **`superbot-clickhouse`**, **`superbot-dashboard`** (names from linked Railway project).
-- **Alerts**, **wallet/collection tracking**, **analytics**, **opportunity-style flows**.
-- **No mint slash UX** on the main bot app (`apps/bot` excludes `mint-*` command loading).
+- **Alerts** and delivery pipelines  
+- **Wallet** and **collection** tracking  
+- **Analytics** and indexing workers  
+- **Opportunity-style** detection and scoring  
+- **No mint execution slash UX** on the main bot app (mint commands live only on Supermint)
 
 ### Supermint / `mint-executor-bot`
 
-- **Dedicated Discord app** — token should be **`MINT_EXECUTOR_DISCORD_TOKEN`** (not `DISCORD_TOKEN`).
-- Slash surface (canonical names in repo):
-  - `/mint-status` — engine health + merge status + **mainnet proof readiness**.
-  - `/mint-preflight`, `/mint-result`, `/mint-jobs`, `/mint-settings`, `/mint-schedule`, `/mint-copy-wallet`, `/mint-stop`
-  - `/mint-approve`, `/mint-revoke`, `/mint-approvals` *(legacy `mint-approve-wallet` / `mint-revoke-wallet` names were removed; loader skips stray `*-wallet` files in `dist`)*  
-  - `/mint-emergency-stop`, `/mint-emergency-resume`, `/mint-confirm-mainnet`
+Mint-only Discord UX (names as operators know them; **current slash names** in repo are in parentheses where renamed):
+
+- `/mint-status`  
+- `/mint-preflight`  
+- `/mint-result`  
+- `/mint-jobs`  
+- `/mint-settings`  
+- `/mint-schedule`  
+- `/mint-copy-wallet`  
+- `/mint-stop`  
+- **`/mint-approve-wallet`** → **canonical:** **`/mint-approve`**  
+- **`/mint-revoke-wallet`** → **canonical:** **`/mint-revoke`**  
+- **`/mint-approvals`** (list active approvals)  
+- `/mint-emergency-stop`  
+- `/mint-emergency-resume`  
+- `/mint-confirm-mainnet`  
 
 ### Mint-engine
 
-- **HTTP**: `GET /health/mint-engine` (public, `healthSchemaVersion: 2`), `POST /v1/mint/*` **HMAC**.
-- **Job creation**, **preflight**, **mainnet dry-run path**, **live path** behind **`mainnetGuard` / `ExecutionPolicyEngine` / beta gates**.
-- **Signer** via **`SignerAdapter`** (no `User.encryptedPrivateKey` in engine — enforced by test).
-- **Nonce lock**, **broadcast engine**, **result tracker**, **audit log** hooks.
+- **HTTP API** — public **`GET /health/mint-engine`** (`healthSchemaVersion: 2`); **`POST /v1/mint/*`** with **HMAC**  
+- **Job creation** and persistence  
+- **Preflight** and simulation path  
+- **Mainnet dry-run** path (policy-gated)  
+- **Live execution** behind **mainnet beta / broadcast / testnet / caps / approval / signer** gates  
+- **Policy engine** (`ExecutionPolicyEngine`, `mainnetGuard`, env from `mintEnv`)  
+- **Signer integration** (`SignerAdapter` — compares **`planHash`** to **`approvedPlanHash`** on sign path)  
+- **Nonce lock** (`NonceLock` + partial unique index verified by `db:verify-mint`)  
+- **Broadcast engine** + **result tracker** + **audit** hooks  
 
-### Database (Prisma / Postgres)
+### Database
 
-Models present in `packages/database/prisma/schema.prisma` include:  
-`MintWallet`, `MintWalletAuthorization`, `CopyMintConfig`, `MintJob`, `MintDrop`, `NonceLock`, `MintTransaction`, `MintSimulation`, `MintAuditLog`, `TrackedMintTrigger`, `MintProviderHealth`, `MintMainnetReadiness`, `MainnetExecutionApproval`, `MintEngineRuntimeState`.
+- **Prisma** + **Postgres**  
+- **Mint tables** (wallets, jobs, drops, simulations, transactions, audit, provider health, readiness checklist)  
+- **MainnetExecutionApproval** (wallet approval records)  
+- **MintEngineRuntimeState** (runtime emergency flag)  
 
 ### Redis / queues
 
-- **BullMQ / Redis** used for mint-engine service auth nonce replay (`MINT_API_*`), queues for workers as configured.
-- Exact queue names are internal to `@superbot/queue`; mint-engine wires workers on startup.
+- **Redis** for **HMAC nonce replay** protection and **BullMQ** job infrastructure (see `@superbot/queue`)  
+- **Mint execution workers** started with mint-engine HTTP server  
+- **Trigger / delivery** queues exist for broader SuperBot stack where configured — mint-engine focuses on mint job execution and related workers  
 
 ---
 
 ## 3. Current Deployment Status
 
-### Repo
+### Git
 
-| Item | Value |
-|------|--------|
-| Branch | `master` |
-| Latest commit | `b55bd8898b581fde58940a362101a3de5381f02d` |
-| Pushed | Yes (`master...origin/master` clean) |
-| Uncommitted changes | None at audit time |
+| Check | Value |
+|--------|--------|
+| **Current branch** | `master` |
+| **Latest commit hash** | `9be835087331f10749022dacb251d49aabf32219` |
+| **Pushed** | Yes (`master...origin/master` clean at refresh) |
+| **Uncommitted changes** | None |
 
-### Railway (linked project snapshot via `railway status --json`, 2026-05-13)
+### Railway (linked project; `npx @railway/cli status --json`, refreshed 2026-05-13)
 
-| Service | SERVICE_TYPE (operator sets on Railway) | Deployed | Healthy | Latest commit (Git) | Notes |
-|---------|----------------------------------------|----------|---------|----------------------|--------|
-| **superbot-mint-engine** | `mint-engine` | Yes | `SUCCESS`, instance `RUNNING` | `b55bd88` | Public URL pattern: `superbot-mint-engine-production.up.railway.app` |
-| **superbot-mint-executor-bot** | `mint-executor-bot` | Yes | `SUCCESS`, `RUNNING` | `b55bd88` | Discord bot — may have **no** HTTP service domain |
-| **superbot-backend** | typically `api` / router | Yes | `SUCCESS`, `RUNNING` | `b55bd88` | Main API host in snapshot |
-| **superbot-floor-worker** | `floor-worker` | Yes | `SUCCESS` | `b55bd88` | |
-| **superbot-market-indexer** | `market-indexer` | Yes | `SUCCESS` | `b55bd88` | |
-| **superbot-sales-indexer** | `sales-indexer` | Yes | `SUCCESS` | `b55bd88` | |
-| **superbot-clickhouse** | n/a | Yes | `SUCCESS` | `b55bd88` | |
-| **superbot-dashboard** | n/a | Yes | `SUCCESS` | `b55bd88` | |
-| **Redis** | n/a | Yes | `SUCCESS` | image deploy | Password auth per Railway template |
-| **Postgres** | n/a | Yes | `SUCCESS` | image deploy | Managed DB service |
+Application services below show **Git `commitHash`** from **`singledavinci/superbot-backend`** (Postgres/Redis use image deploy SHAs — not comparable to app commits).
 
-**Interpretation:** **mint-engine** and **mint-executor-bot** were on the **same commit as local `master`** at audit time. Re-check after any new push: `npx @railway/cli status --json` or Railway UI → Deployments.
+| Service | SERVICE_TYPE | Deployed | Healthy | Latest commit | Notes |
+|---------|----------------|----------|---------|---------------|--------|
+| **superbot-mint-engine** | `mint-engine` | Yes | `SUCCESS`, `RUNNING` | `9be835087331f10749022dacb251d49aabf32219` | e.g. `superbot-mint-engine-production.up.railway.app` |
+| **superbot-mint-executor-bot** | `mint-executor-bot` | Yes | `SUCCESS`, `RUNNING` | `9be835087331f10749022dacb251d49aabf32219` | Discord bot; may have empty `serviceDomains` |
+| **superbot-backend** | `api` (typical) | Yes | `SUCCESS`, `RUNNING` | `9be835087331f10749022dacb251d49aabf32219` | Main intelligence/API surface in this project |
+| **superbot-floor-worker** | `floor-worker` | Yes | `SUCCESS` | `9be835087331f10749022dacb251d49aabf32219` | |
+| **superbot-market-indexer** | `market-indexer` | Yes | `SUCCESS` | `9be835087331f10749022dacb251d49aabf32219` | |
+| **superbot-sales-indexer** | `sales-indexer` | Yes | `SUCCESS` | `9be835087331f10749022dacb251d49aabf32219` | |
+| **superbot-clickhouse** | n/a | Yes | `SUCCESS` | `9be835087331f10749022dacb251d49aabf32219` | |
+| **superbot-dashboard** | n/a | Yes | `SUCCESS` | `9be835087331f10749022dacb251d49aabf32219` | |
+| **Redis** | n/a | Yes | `SUCCESS` | *(image)* | |
+| **Postgres** | n/a | Yes | `SUCCESS` | *(image)* | |
+
+**Recent redeploy:** mint-engine and mint-executor-bot deployments were tied to **`9be8350`** at CLI refresh — confirm timestamps in Railway UI after any new push.
 
 ---
 
 ## 4. Environment Configuration Review
 
-Values below describe **what must exist** and **template defaults** from `production.env.example`. **Do not commit real `.env`.** In Railway, confirm each variable **is set** (never paste values into tickets).
+**Legend — `Present`:** `set` = present in Railway template / expected; **`verify`** = operator must confirm in Railway without pasting values. **`Safe value`** = policy direction, not a literal secret.
 
-### Mint-engine (representative)
+### Mint-engine
 
-| Variable | Service | Present (template) | Safe / policy | Notes |
-|----------|---------|-------------------|---------------|--------|
-| `SERVICE_TYPE` | mint-engine | Documented | safe when `mint-engine` | Wrong `SERVICE_TYPE` → wrong process |
-| `MINT_ENGINE_MODE` | mint-engine | `prepare` in example | policy | `live` only when deliberately going live |
-| `MINT_EXECUTION_ENABLED` | mint-engine | `false` in example | safer default | Must be `true` for live execution path |
-| `MINT_MAINNET_BROADCAST_ENABLED` | mint-engine | `false` in example | safer default | Must be `true` for mainnet broadcast |
-| `MINT_TESTNET_ONLY` | mint-engine | `true` in example | blocks mainnet when true | Must be `false` for mainnet proof |
-| `MINT_MAINNET_BETA` | mint-engine | *(see mintEnv defaults)* | policy | Controlled beta master switch |
-| `MINT_MAINNET_DRY_RUN` | mint-engine | *(env)* | policy | Dry-run on mainnet RPC without broadcast |
-| `MINT_REQUIRE_SECURE_SIGNER` | mint-engine | `true` in example | safe | Stricter signer expectations |
-| `MINT_EMERGENCY_STOP` | mint-engine | `false` in example | safe | Stops execution when true |
-| `MINT_MAINNET_MAX_ACTIVE_JOBS` | mint-engine | default `1` in code | safe | Single-flight style cap |
-| `MINT_MAINNET_MAX_QUANTITY` | mint-engine | default `1` in code | safe | |
-| `MINT_MAINNET_COPY_LIVE_ENABLED` | mint-engine | default false in code | safe | Must stay off for proof policy |
-| `MINT_MAINNET_PRIVATE_RELAY_ENABLED` | mint-engine | default false in code | safe | |
-| `MINT_MAINNET_AUTO_REPLACE_ENABLED` | mint-engine | default false in code | safe | |
-| `MINT_MAINNET_REQUIRE_MANUAL_CONFIRMATION` | mint-engine | default true in code | safe | |
-| `DATABASE_URL` | mint-engine | required in prod | secret | Never log |
-| `REDIS_URL` / Redis | mint-engine | required for HMAC replay | secret | |
-| `MINT_ENGINE_RPC_URL` / RPC fallbacks | mint-engine | required for chain work | secret URLs | |
-| `OPENSEA_API_KEY` | mint-engine | optional | secret | Drop resolution |
-| `MINT_ENGINE_SERVICE_SECRET` | mint-engine | required | secret | Shared with executor for HMAC |
+| Variable | Service | Present | Safe value | Notes |
+|----------|---------|---------|------------|--------|
+| `SERVICE_TYPE` | mint-engine | verify | `mint-engine` | Wrong value → wrong process |
+| `MINT_ENGINE_MODE` | mint-engine | verify | `prepare` / `simulation` / `live` per phase | `live` only when deliberately going live |
+| `MINT_EXECUTION_ENABLED` | mint-engine | verify | `false` until ready; `true` when executing | |
+| `MINT_MAINNET_BROADCAST_ENABLED` | mint-engine | verify | `false` until mainnet proof phase | |
+| `MINT_TESTNET_ONLY` | mint-engine | verify | `true` for testnet phase; **`false`** for mainnet proof | |
+| `MINT_MAINNET_BETA` | mint-engine | verify | `true` for controlled beta when intended | |
+| `MINT_MAINNET_DRY_RUN` | mint-engine | verify | per runbook | |
+| `MINT_REQUIRE_SECURE_SIGNER` | mint-engine | verify | `true` recommended | |
+| `MINT_EMERGENCY_STOP` | mint-engine | verify | `false` for normal ops | |
+| `MINT_MAINNET_MAX_ACTIVE_JOBS` | mint-engine | verify | **`1`** for beta | code default `1` |
+| `MINT_MAINNET_MAX_QUANTITY` | mint-engine | verify | **`1`** for beta | code default `1` |
+| `MINT_MAINNET_COPY_LIVE_ENABLED` | mint-engine | verify | **`false`** | |
+| `MINT_MAINNET_PRIVATE_RELAY_ENABLED` | mint-engine | verify | **`false`** | |
+| `MINT_MAINNET_AUTO_REPLACE_ENABLED` | mint-engine | verify | **`false`** | |
+| `MINT_MAINNET_REQUIRE_MANUAL_CONFIRMATION` | mint-engine | verify | **`true`** | |
+| `DATABASE_URL` | mint-engine | verify | set, never logged | secret |
+| `REDIS_URL` | mint-engine | verify | set | secret |
+| `MINT_ENGINE_RPC_URL` | mint-engine | verify | set for chain ops | often secret URL |
+| `OPENSEA_API_KEY` | mint-engine | verify | optional | secret |
+| `MINT_ENGINE_SERVICE_SECRET` | mint-engine | verify | set; must match executor | secret |
 
 ### Mint-executor-bot
 
-| Variable | Service | Present (template) | Safe | Notes |
-|----------|---------|-------------------|------|--------|
-| `SERVICE_TYPE` | executor | Documented | `mint-executor-bot` | |
-| `MINT_EXECUTOR_DISCORD_TOKEN` | executor | placeholder | secret | Must **not** be main `DISCORD_TOKEN` |
-| `MINT_ENGINE_URL` | executor | example internal URL | non-secret host only | Executor `mint-status` **requires** this |
-| `MINT_ENGINE_SERVICE_SECRET` | executor | placeholder | secret | Must match engine |
-| `MINT_EXECUTOR_GUILD_ID` | executor | commented | optional | Guild slash = fast updates |
-| `MINT_EXECUTOR_DISCORD_APPLICATION_ID` | executor | commented | optional | If set, must match token app id |
-| `MINT_EXECUTOR_REGISTER_GLOBAL_COMMANDS` | executor | commented | optional | Defaults guild-only when guild id set |
-| `MINT_ADMIN_DISCORD_IDS` | engine + executor | operator | non-secret ids | Admin slash + engine admin routes |
-| `MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS` | engine | `false` in example | safe | SuperBot must not own mint slash |
+| Variable | Service | Present | Safe value | Notes |
+|----------|---------|---------|------------|--------|
+| `SERVICE_TYPE` | executor | verify | `mint-executor-bot` | |
+| `MINT_EXECUTOR_DISCORD_TOKEN` | executor | verify | Supermint app only | secret; do not reuse main `DISCORD_TOKEN` |
+| `MINT_ENGINE_URL` | executor | verify | HTTPS/internal URL to mint-engine | required for `/mint-status` |
+| `MINT_ENGINE_SERVICE_SECRET` | executor | verify | matches engine | secret |
+| `MINT_EXECUTOR_GUILD_ID` | executor | verify | set for guild commands | optional but recommended for fast slash refresh |
+| `MINT_EXECUTOR_DISCORD_APPLICATION_ID` | executor | verify | matches token app id if set | mismatch → registration skipped |
+| `MINT_ADMIN_DISCORD_IDS` | engine + executor | verify | set for admin Discord routes / slash admin | non-secret ids |
+| `MINT_INTELLIGENCE_BOT_EXECUTION_COMMANDS` | mint-engine | verify | **`false`** on intelligence path | prevents wrong mental model |
 
 ---
 
-## 5. Mint Status Output (`/mint-status`)
+## 5. Mint Status Output
 
-**This audit cannot paste your live Discord embed.** Run **`/mint-status`** in the **Supermint** server and compare to the structure below.
+**Operator action:** run **`/mint-status`** in Discord and **paste the embed text** into your internal ops log. The template below matches **`buildMintStatusDescription`** output shape.
 
-### Expected sections (from `mintStatusDisplay` + merged payloads)
+```
+Engine reachable: yes | no (+ reason if env missing)
+Engine detail merge (POST /v1/mint/status): ok | auth failed (HTTP …) | failed | skipped (…)
 
-```markdown
-Engine reachable: yes
-Engine detail merge (POST /v1/mint/status): ok | auth failed (HTTP …) | failed | skipped
-…
 Mode: …
 Live execution flag: …
 Mainnet broadcast: …
 Mainnet beta: …
 Mainnet dry-run: …
 Emergency stop: …
-Runtime emergency DB: true | false
+Runtime emergency DB: …
 Testnet only: …
 Signer configured: …
 Default chain id: …
@@ -175,68 +193,75 @@ Auto replace: …
 Manual confirmation: …
 Max active jobs: …
 Max quantity: …
-Health schema: 2
-… (payload incomplete warning if applicable)
+Health schema: …
+
+[If incomplete payload:]
+Status payload incomplete. Do not run mainnet proof.
+Required fields: …
+mainnetProofReady: false
+
 Mainnet proof readiness: ready | not ready
 First blocker: …
 ```
 
-### Checklist
+**Questions**
 
-| Question | Expected after recent fixes |
-|----------|----------------------------|
-| Does `/mint-status` show `undefined`? | **No** |
-| Does it show `missing` for required fields? | **Only if** engine/merge incomplete or POST auth failed |
-| Does it show readiness? | **Yes** — `Mainnet proof readiness` + `First blocker` |
-| Current first blocker? | **Operator must read live embed** — often **`signer not configured`** until signer is wired and `signerConfigured` is true |
+| Question | Answer (expected after fixes) |
+|----------|-------------------------------|
+| Does `/mint-status` show **`undefined`**? | **No** |
+| Does it show **`missing`** fields? | **Only if** health incomplete or POST merge failed |
+| Does it show **readiness**? | **Yes** |
+| **Current first blocker?** | **Operator must read live `First blocker:` line** — commonly **`signer not configured`** until signer is live and `signerConfigured` is true |
 
 ---
 
 ## 6. Discord Command Surface
 
-### Source (`EXPECTED_MINT_EXECUTOR_COMMAND_NAMES`)
-
 | Command | Source exists | Registered in Discord | Working | Notes |
 |---------|---------------|----------------------|---------|--------|
-| `/mint-status` | Yes | Expect **yes** after deploy | Expect **yes** | Merges GET health + POST `/status` |
-| `/mint-preflight` | Yes | Expect yes | Operator verify | |
-| `/mint-result` | Yes | Expect yes | Operator verify | |
-| `/mint-jobs` | Yes | Expect yes | Operator verify | |
-| `/mint-settings` | Yes | Expect yes | Admin-gated | |
-| `/mint-schedule` | Yes | Expect yes | Operator verify | |
-| `/mint-copy-wallet` | Yes | Expect yes | Operator verify | |
-| `/mint-stop` | Yes | Expect yes | Operator verify | |
-| `/mint-approve` | Yes | Expect yes | **Admin** + HMAC to engine | Replaces legacy **`mint-approve-wallet`** |
-| `/mint-revoke` | Yes | Expect yes | Admin | Replaces **`mint-revoke-wallet`** |
-| `/mint-approvals` | Yes | Expect yes | Admin | Lists approvals |
-| `/mint-emergency-stop` | Yes | Expect yes | Admin | |
-| `/mint-emergency-resume` | Yes | Expect yes | Admin | |
-| `/mint-confirm-mainnet` | Yes | Expect yes | Admin | |
+| `/mint-status` | Yes | verify | verify | |
+| `/mint-preflight` | Yes | verify | verify | |
+| `/mint-result` | Yes | verify | verify | |
+| `/mint-jobs` | Yes | verify | verify | |
+| `/mint-settings` | Yes | verify | verify | Admin |
+| `/mint-schedule` | Yes | verify | verify | |
+| `/mint-copy-wallet` | Yes | verify | verify | |
+| `/mint-stop` | Yes | verify | verify | |
+| `/mint-approve-wallet` **or** `/mint-approve` | **`/mint-approve` only** in repo | verify | verify | Legacy **`-wallet`** slash **removed**; use **`/mint-approve`** |
+| `/mint-revoke-wallet` **or** `/mint-revoke` | **`/mint-revoke` only** in repo | verify | verify | Legacy **`-wallet`** removed |
+| `/mint-approvals` | Yes | verify | verify | Admin |
+| `/mint-emergency-stop` | Yes | verify | verify | Admin |
+| `/mint-emergency-resume` | Yes | verify | verify | Admin |
+| `/mint-confirm-mainnet` | Yes | verify | verify | Admin |
 
-**If a command is missing in Discord:** check **wrong bot token**, **`MINT_EXECUTOR_DISCORD_APPLICATION_ID` mismatch** (registration skipped), **`MINT_EXECUTOR_REGISTER_SLASH_COMMANDS=false`**, **guild vs global** delay, or **Railway not on latest commit**.
+**If missing:** wrong **Discord app token**, **`MINT_EXECUTOR_DISCORD_APPLICATION_ID`** mismatch → registration skipped; **`MINT_EXECUTOR_REGISTER_SLASH_COMMANDS=false`**; **stale `dist`** (mitigated by **`clean-dist`**); **guild ID** not set (slower global propagation); wrong **guild** selected when testing.
 
 ---
 
 ## 7. Database and Migration Status
 
-| DB object | Present in Prisma schema | Verified in live Postgres |
-|-----------|-------------------------|----------------------------|
-| `MintWallet` | Yes | **Operator:** run `npm run db:verify-mint` with prod `DATABASE_URL` |
-| `MintWalletAuthorization` | Yes | same |
-| `CopyMintConfig` | Yes | same |
-| `MintJob` | Yes | same |
-| `MintDrop` | Yes | same |
-| `NonceLock` | Yes | same + expect partial unique index `NonceLock_active_nonce_unique` |
-| `MintTransaction` | Yes | same |
-| `MintSimulation` | Yes | same |
-| `MintAuditLog` | Yes | same |
-| `TrackedMintTrigger` | Yes | same |
-| `MintProviderHealth` | Yes | same |
-| `MintMainnetReadiness` | Yes | same (readiness checklist rows) |
-| `MainnetExecutionApproval` | Yes | same |
-| `MintEngineRuntimeState` | Yes | same (`emergencyStop` runtime) |
+**db identity:** Operator runs **`npm run db:identity`** against the target `DATABASE_URL`.  
+**Migrations:** Operator runs **`npm run db:migrate`** before relying on new columns.  
+**Live table verification:** **`npm run db:verify-mint`** (checks Prisma table names + **`NonceLock_active_nonce_unique`** partial index).
 
-**Commands (operator)**  
+| DB Object | Present (schema) | Notes |
+|-----------|------------------|--------|
+| `MintWallet` | Yes | |
+| `MintWalletAuthorization` | Yes | |
+| `CopyMintConfig` | Yes | |
+| `MintJob` | Yes | |
+| `MintDrop` | Yes | |
+| `NonceLock` | Yes | expect **`NonceLock_active_nonce_unique`** |
+| `MintTransaction` | Yes | |
+| `MintSimulation` | Yes | |
+| `MintAuditLog` | Yes | |
+| `TrackedMintTrigger` | Yes | |
+| `MintProviderHealth` | Yes | |
+| `MintMainnetReadiness` | Yes | checklist JSON |
+| `MainnetExecutionApproval` | Yes | |
+| `MintEngineRuntimeState` | Yes | runtime emergency |
+
+If migrations are not applied:
 
 ```bash
 npm run db:migrate
@@ -244,133 +269,141 @@ npm run db:verify-mint
 npm run db:identity
 ```
 
-This audit **did not** execute `db:verify-mint` against production (no `DATABASE_URL` in this session).
-
 ---
 
 ## 8. Mainnet Policy and Safety Gates
 
-Evidence references: `mainnetGuard.ts`, `ExecutionPolicyEngine.ts`, `evaluateMainnetStrict` tests, `MintExecutionEngine`, `SignerAdapter`, `BroadcastEngine`, `mintEnv.ts`, HTTP routes for approvals / emergency.
-
-| Safety gate | Enforced | Evidence | Residual risk |
-|---------------|----------|----------|----------------|
-| Mainnet blocked unless strict policy | Yes | `mainnetGuard` + policy tests | Mis-set env in prod |
-| `MINT_MAINNET_BETA` required for controlled live | Yes | `mintEnv` + beta tests | Operator disables beta by mistake |
-| `MINT_MAINNET_BROADCAST_ENABLED` | Yes | guard + env | |
-| `MINT_TESTNET_ONLY` must be false for mainnet | Yes | tests / guard | |
-| Wallet approval record | Yes | `MainnetExecutionApproval` + queries | Wrong guild/user scope |
-| Signer approval flags | Yes | `MINT_MAINNET_SIGNER_APPROVED` etc. | Signer not approved |
-| Gas caps (`MINT_MAX_*`) | Yes | `mintGasCapsConfigured` / policy | Caps unset → block |
-| Max quantity / active jobs | Yes | env + job creation tests | |
-| Emergency stop (env + DB) | Yes | `emergencyRuntime` + health | |
-| Manual confirmation | Yes | `MINT_MAINNET_REQUIRE_MANUAL_CONFIRMATION` | |
-| Collection allow-list (approval) | Yes | approval query tests | |
-| No copy-mint live on mainnet (policy) | Yes | policy tests | |
+| Safety Gate | Enforced | Evidence | Risk |
+|---------------|----------|----------|------|
+| Mainnet blocked unless strict policy passes | Yes | `mainnetGuard`, `ExecutionPolicyEngine`, tests | Wrong env |
+| `MINT_MAINNET_BETA` required | Yes | `mintEnv`, `mainnetBetaGates` tests | Beta off blocks controlled live |
+| `MINT_MAINNET_BROADCAST_ENABLED` required | Yes | guard + env | |
+| `MINT_TESTNET_ONLY` must be false for mainnet | Yes | policy tests | |
+| Wallet approval required | Yes | `MainnetExecutionApproval` + HTTP/Discord flows | Mis-scoped approval |
+| Signer approval required | Yes | `MINT_MAINNET_SIGNER_APPROVED` / local-dev variant | Unapproved signer |
+| Gas cap required | Yes | `mintGasCapsConfigured` + policy | Missing caps → block |
+| Max total cost required | Yes | same | |
+| Max quantity required | Yes | job create tests | |
+| One active job limit | Yes | env + policy | |
+| Emergency stop | Yes | env + `MintEngineRuntimeState` + health | |
+| Manual confirmation | Yes | env + confirm route | |
+| Allowed collection restrictions | Yes | approval query tests | |
+| No copy-mint live on mainnet | Yes | policy tests | |
 | No private relay by default | Yes | env defaults + policy | |
 | No auto-replace by default | Yes | env defaults + policy | |
-| No `User.encryptedPrivateKey` in engine | Yes | `liveExecutionPolicy.test.ts` | |
-| No seed phrase via Discord UX | Policy / product | Executor commands do not collect seeds | Social engineering |
+| No `User.encryptedPrivateKey` use | Yes | `liveExecutionPolicy` string guard test | |
+| No seed phrase / private key collection in Discord | Yes | command designs | phishing |
 
 ---
 
 ## 9. Signer Status
 
-**Is signer configured?**  
-Determined at runtime by **`SignerAdapter.signerConfigured()`** and surfaced in **`GET /health/mint-engine`** and `/mint-status`. **Operator must read live `/mint-status`.**
-
-**Expected signer types**  
-Controlled by env such as **`MINT_REQUIRE_SECURE_SIGNER`**, optional local-dev paths, and **`MINT_MAINNET_SIGNER_APPROVED`** / **`MINT_MAINNET_LOCAL_DEV_SIGNER_APPROVED`** for mainnet live (see `mintEnv` + `mintRoutes` `/status` fields `signerMode`, `signerMainnetApproved`).
-
-**Does signer avoid `User.encryptedPrivateKey`?**  
-**Yes** — enforced by automated test that the engine module does not reference it.
-
-**Plan hash, caps, nonce lock, emergency**  
-Execution path is designed to **respect policy outputs**, **gas/value caps**, **nonce lock**, and **emergency stop**; detailed line-by-line proof is in engine tests — **production behavior** still needs **operator dry-run / controlled tx** evidence.
+| Question | Answer |
+|----------|--------|
+| **Is signer configured?** | **Unknown in this document** — read **`Signer configured:`** on live **`/mint-status`**. |
+| **What signer type is expected?** | See **`SignerAdapter.resolveMode()`** + `/status` field **`signerMode`** in engine; env **`MINT_REQUIRE_SECURE_SIGNER`**, local-dev flags in `mintEnv`. |
+| **Is signer mainnet-approved?** | Check **`signerMainnetApproved`** on **`POST /v1/mint/status`** merge and env **`MINT_MAINNET_SIGNER_APPROVED`** (or local-dev approval). |
+| **Avoid Discord private key input?** | Product intent: no collector commands; keys belong in **engine** secure config only. |
+| **Avoid `User.encryptedPrivateKey`?** | **Yes** — automated test ensures engine module does not reference it. |
+| **Verify `planHash`?** | **Yes** — `SignerAdapter` enforces **`planHash === approvedPlanHash`** on sign path. |
+| **Respect gas/value caps?** | Policy + `GasEngine` / caps env — enforced before live path. |
+| **Require nonce lock?** | Nonce lock model + execution flow — see engine/worker code. |
+| **Block when emergency stop active?** | **Yes** — runtime + env OR semantics; signer/broadcast tests cover refusal. |
 
 ### If signer is not configured
 
 **Current blocker:**  
-Signer is not configured (or not mainnet-approved). **Mainnet proof cannot proceed** until the operator completes signer setup per your runbook and **`/mint-status`** shows the next readiness state.
+Signer is not configured. Mainnet proof cannot proceed until signer is configured and approved.
 
-**Typical next signer steps (non-secret)**  
+**Next signer setup steps (no secrets in chat)**
 
-1. Choose signer backend (KMS / HSM / approved local-dev path per policy only).  
-2. Set required env on **mint-engine** service (no keys in Discord).  
-3. Set **`MINT_MAINNET_SIGNER_APPROVED`** (or documented local-dev approval) only when policy allows.  
-4. Restart mint-engine; re-run **`/mint-status`** → confirm **`Signer configured: true`** and review **First blocker**.
+1. Provision the **approved** signer backend for mint-engine (KMS/HSM or policy-allowed path).  
+2. Set mint-engine env vars in **Railway** only (never Discord).  
+3. Set **`MINT_MAINNET_SIGNER_APPROVED`** (or documented local-dev approval) **only** when runbook allows.  
+4. **Redeploy / restart** mint-engine.  
+5. Re-run **`/mint-status`** — confirm **`Signer configured: true`** and read the new **First blocker**.
 
 ---
 
-## 10. Execution Flow Readiness (controlled mainnet proof)
+## 10. Execution Flow Readiness
+
+Flow (as requested; step 3 uses **current** slash name):
+
+1. `/mint-status`  
+2. Signer configured  
+3. **`/mint-approve`** *(replaces legacy **`/mint-approve-wallet`**)*  
+4. Dry-run  
+5. Manual confirmation  
+6. 0 ETH self-transfer  
+7. `/mint-result`  
+8. Emergency stop test  
+9. Document proof  
 
 | Step | Status | Blocker | Next action |
 |------|--------|---------|-------------|
-| 1. `/mint-status` | **Ready** (tooling) | Live values | Run in Discord; confirm no `missing` / readiness |
-| 2. Signer configured | **Operator** | `signerConfigured` false | Complete signer setup |
-| 3. `/mint-approve` (strict caps) | **Not done here** | Admin + policy | One-wallet approval per runbook |
-| 4. Mainnet dry-run job | **Not proven here** | RPC, flags | Use engine job API / documented flow |
-| 5. Manual confirmation | **Gated** | Job state | `/mint-confirm-mainnet` when appropriate |
-| 6. 0 ETH self-transfer | **Not proven here** | — | Optional proof step per your runbook |
-| 7. `/mint-result` | **Tooling ready** | Needs real job id | After real job |
-| 8. Emergency stop drill | **Tooling ready** | Ops | `/mint-emergency-stop` / resume |
-| 9. Document proof | **Not done** | — | Export logs + tx hashes |
+| 1. `/mint-status` | Ready (tooling) | — | Run in Discord; archive output |
+| 2. Signer configured | **Not verified here** | signer | Follow §9 |
+| 3. `/mint-approve` | **Not verified here** | admin + policy | Strict caps; one wallet |
+| 4. Dry-run | **Not verified here** | RPC + flags | Engine job flow per runbook |
+| 5. Manual confirmation | **Gated** | job state | `/mint-confirm-mainnet` when applicable |
+| 6. 0 ETH self-transfer | **Not verified** | ops choice | If in runbook |
+| 7. `/mint-result` | Tooling ready | real `job_id` | After job |
+| 8. Emergency stop test | Tooling ready | ops | `/mint-emergency-stop` then resume |
+| 9. Document proof | Not done | — | Internal doc |
 
 ---
 
 ## 11. What Has Been Covered
 
-- Separate **mint-executor** Discord app; SuperBot does not register `mint-*`.  
-- **mint-engine** HTTP server, **HMAC** routes, **public health v2** with full safety fields + `runtimeEmergencyStopAvailable`.  
-- **`/mint-status`** fixed (no `undefined`; readiness summary).  
-- **14** slash commands restored; **`clean-dist`** prevents stale renamed command JS.  
-- **Guild-first** slash registration when `MINT_EXECUTOR_GUILD_ID` set; optional global via `MINT_EXECUTOR_REGISTER_GLOBAL_COMMANDS`.  
-- **Mainnet beta / broadcast / testnet-only / emergency / caps / quantity / jobs** policy code + tests.  
-- **Mainnet execution approval** model + Discord **approve / revoke / list**.  
-- **DB models** for jobs, approvals, runtime emergency, readiness checklist, nonce lock index verification script.  
-- **Command loader** diagnostics (per-file import errors, duplicates, expected count).
+- Separate **Supermint** Discord app + **`mint-executor-bot`** process.  
+- **Mint-engine** HTTP + **HMAC** + **health schema v2** + runtime DB flag in health.  
+- **`/mint-status`** correctness (values + readiness + blockers).  
+- **14** slash commands + **loader logging** + **legacy `*-wallet` dist skip** + **`clean-dist`** in build.  
+- **Guild-first** registration when `MINT_EXECUTOR_GUILD_ID` set; optional **`MINT_EXECUTOR_REGISTER_GLOBAL_COMMANDS`**.  
+- **Mainnet beta / broadcast / testnet / emergency / caps / quantity / jobs / manual confirm** in code + tests.  
+- **`MainnetExecutionApproval`** + Discord **approve / revoke / list**.  
+- **Prisma models** + **`db:verify-mint`** index check script.  
 
 ---
 
-## 12. What Is Not Yet Proven (in this audit)
+## 12. What Is Not Yet Proven
 
-- **Live production** env values (only Railway knows).  
-- **`npm run db:verify-mint`** against production DB from this session.  
-- **Signer** actually signing in production with approved configuration.  
-- **Wallet approval** end-to-end on prod Discord + DB row.  
-- **Mainnet dry-run** job completion in prod.  
-- **0 ETH self-transfer** proof (if still in your runbook).  
-- **`MintTransaction`** row from a **real** mainnet tx in prod.  
-- **`/mint-result`** after real broadcast.  
-- **Emergency stop** behavior against running workers in prod.  
-- **Public mint / FCFS** stress scenarios — **explicitly out of scope** for first proof.
+- Production **signer** live signing.  
+- **Wallet approval** via Discord end-to-end on prod DB.  
+- **Mainnet dry-run** completion in prod.  
+- **0 ETH self-transfer** (if required by runbook).  
+- **`MintTransaction`** from a **real** mainnet hash in prod.  
+- **`/mint-result`** after a real broadcast.  
+- **Emergency stop** under prod load.  
+- **Low-cost public mint** / FCFS — **explicitly not** first proof target.  
 
 ---
 
-## 13. Immediate Next Steps (ordered)
+## 13. Immediate Next Steps
 
-1. **Open `/mint-status`** on Supermint — copy embed to internal ops doc.  
-2. If **First blocker** = signer → complete **signer** setup; restart **mint-engine**.  
-3. Re-run **`/mint-status`** until readiness advances (do **not** skip gates).  
-4. When policy allows: **`/mint-approve`** with **strict caps** for **one** wallet / user / guild scope.  
-5. Run **mainnet dry-run** job per runbook.  
-6. If required: **manual confirm** via **`/mint-confirm-mainnet`**.  
-7. Optional: **0 ETH self-transfer** proof step.  
-8. **`/mint-result`** with real `job_id`.  
-9. **`/mint-emergency-stop`** drill + resume.  
-10. **Document** hashes, job ids, timestamps, and approvers.
+1. **Configure approved signer** — mint-engine Railway env + deploy (**no keys in Discord**).  
+2. **`/mint-status`** — confirm **`Signer configured: true`**.  
+3. **`/mint-status`** — confirm **Mainnet proof readiness** advances; note **First blocker**.  
+4. **`/mint-approve`** — one wallet; strict **`max_fee_per_gas`**, **`max_priority_fee_per_gas`**, **`max_total_cost_native`**, optional **`max_quantity`**, **`expires_in_hours`**, **`allowed_collections`**.  
+5. **Mainnet dry-run** — engine job path per **`docs/mainnet-beta-runbook.md`** / internal runbook.  
+6. **`/mint-confirm-mainnet`** — when manual confirmation is required.  
+7. **0 ETH self-transfer** — if still a proof step.  
+8. **`/mint-result`** — paste **`job_id`**.  
+9. **`/mint-emergency-stop`** / **`/mint-emergency-resume`** — controlled drill.  
+10. **Document proof** — job ids, tx hashes, timestamps, approvers (no secrets).  
 
 ---
 
 ## 14. Do Not Do Yet
 
-- Do **not** run a **hyped / FCFS** mint as first proof.  
-- Do **not** enable **`MINT_MAINNET_COPY_LIVE_ENABLED`** for mainnet proof.  
-- Do **not** enable **`MINT_MAINNET_PRIVATE_RELAY_ENABLED`** without explicit policy.  
-- Do **not** approve **multiple** wallets beyond controlled beta scope.  
-- Do **not** raise **gas / cost caps** to “make it work”.  
+- Do **not** run an **NFT mint** as the first mainnet proof.  
+- Do **not** enable **`MINT_MAINNET_COPY_LIVE_ENABLED`** for proof.  
+- Do **not** enable **`MINT_MAINNET_PRIVATE_RELAY_ENABLED`**.  
+- Do **not** approve **multiple** wallets outside beta policy.  
+- Do **not** raise **gas / cost caps** to bypass failures.  
 - Do **not** disable **emergency stop** or **manual confirmation**.  
-- Do **not** broadcast with **`MINT_TESTNET_ONLY=true`**.  
-- Do **not** paste **private keys / seeds** into Discord or tickets.
+- Do **not** open execution to **end users** before runbook sign-off.  
+- Do **not** target **FCFS / hyped** mints for first proof.  
 
 ---
 
@@ -378,24 +411,24 @@ Signer is not configured (or not mainnet-approved). **Mainnet proof cannot proce
 
 **Status fixed; commands restored; signer configuration next**
 
-**Why:** Code, tests, deployment metadata, and operator thread confirm **status** and **slash commands** are restored and **mint-engine / executor** track **`b55bd88`**. **Mainnet proof** is a **separate operational milestone** that depends on **live signer**, **DB**, **approvals**, and **dry-run / tx evidence** — not asserted complete here.
+The **software path** for health, status, slash registration, and **policy gates** is in place on **`master`** / **`9be8350`**, and **Railway** showed mint services on that commit at last check. **Operational mainnet proof** still depends on **live signer**, **DB migration verification**, **approvals**, and **exercise** of dry-run / tx flows — which only the operator can complete safely.
 
 ---
 
 ## 16. Operator Checklist
 
-- [ ] `/mint-status` shows **no** `undefined`  
-- [ ] All **14** mint slash commands visible in the **Supermint** guild  
-- [ ] **`Signer configured: true`** (when policy expects signing)  
-- [ ] **One** wallet approved with **strict** caps (`/mint-approve`)  
-- [ ] **Mainnet dry-run** passed (logged evidence)  
-- [ ] **0 ETH self-transfer** completed *(if in runbook)*  
-- [ ] `/mint-result` verified for a **real** job id  
-- [ ] `/mint-emergency-stop` tested in a **safe** window  
-- [ ] Proof **documented** (no secrets in doc)
+- [ ] `/mint-status` shows no `undefined`  
+- [ ] All mint commands visible (14) on **Supermint**  
+- [ ] Signer configured (`Signer configured: true`)  
+- [ ] One wallet approved via **`/mint-approve`** with strict caps  
+- [ ] Dry-run passed (evidence logged)  
+- [ ] 0 ETH self-transfer completed *(if in runbook)*  
+- [ ] `/mint-result` verified for a real job  
+- [ ] Emergency stop tested  
+- [ ] Proof documented (no secrets)  
 
 ---
 
-### Audit artifact
+### Deliverable path
 
-- **Report path:** `docs/current-mint-bot-readiness-report.md`
+`docs/current-mint-bot-readiness-report.md`
