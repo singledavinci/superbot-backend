@@ -1,6 +1,11 @@
 import { SlashCommandBuilder, type ChatInputCommandInteraction, EmbedBuilder } from 'discord.js';
 import { mintEngineGet, mintEngineHostLabel, mintEnginePost } from '../lib/mintHttp';
-import { buildMintStatusDescription, formatMintStatusEngineFailure } from '../lib/mintStatusDisplay';
+import {
+    buildMintStatusDescription,
+    formatMintExecutorEnvUnreachable,
+    formatMintStatusEngineFailure,
+    type MintStatusPostMerge,
+} from '../lib/mintStatusDisplay';
 import { mintExecutorStatusEnvBlocker, mintExecutorStatusEnvWarnings } from '../lib/mintStatusEnv';
 
 const FOOTER =
@@ -24,7 +29,7 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
             embeds: [
                 new EmbedBuilder()
                     .setTitle('Mint engine status')
-                    .setDescription(`**${envBlock}**`)
+                    .setDescription(formatMintExecutorEnvUnreachable(envBlock))
                     .setFooter({ text: FOOTER }),
             ],
         });
@@ -88,26 +93,35 @@ export async function execute(interaction: ChatInputCommandInteraction): Promise
         return;
     }
 
-    /** Merge HMAC **POST /v1/mint/status** (rich env/runtime) under GET health so short `/health/mint-engine` still fills Discord lines. */
+    /** Merge HMAC **POST /v1/mint/status** (rich env/runtime) under GET health so older short GET payloads still fill Discord lines. */
     let merged: Record<string, unknown> = { ...j };
+    let postMerge: MintStatusPostMerge = 'skipped';
+    let postHttpStatus: number | undefined;
     try {
         const postRes = await mintEnginePost('/status', {});
+        postHttpStatus = postRes.status;
         if (postRes.ok) {
             const statusText = await postRes.text();
             try {
                 const statusJson = JSON.parse(statusText) as Record<string, unknown>;
                 merged = { ...statusJson, ...j };
+                postMerge = 'used';
             } catch {
-                /* ignore invalid JSON from engine */
+                postMerge = 'http_error';
             }
+        } else if (postRes.status === 401 || postRes.status === 403) {
+            postMerge = 'auth_failed';
+        } else {
+            postMerge = 'http_error';
         }
     } catch {
-        /* secret validated earlier; network/HMAC errors → show GET-only payload */
+        postMerge = 'skipped';
     }
 
     const warnings = mintExecutorStatusEnvWarnings();
     const body =
-        buildMintStatusDescription(merged) + (warnings.length ? '\n\n—\n' + warnings.join('\n') : '');
+        buildMintStatusDescription(merged, { postStatusMerge: postMerge, postHttpStatus }) +
+        (warnings.length ? '\n\n—\n' + warnings.join('\n') : '');
 
     const embed = new EmbedBuilder().setTitle('Mint engine status').setDescription(body).setFooter({ text: FOOTER });
     await interaction.editReply({ embeds: [embed] });

@@ -1,6 +1,5 @@
 import type { PrismaClient } from '@superbot/database';
 import { mintEnv } from '../config/mintEnv';
-import { getEffectiveEmergencyStop } from '../engine/emergencyRuntime';
 import { SignerAdapter } from '../engine/SignerAdapter';
 
 /** Public-safe JSON for GET /health/mint-engine (no secrets, URLs, or keys). */
@@ -14,7 +13,10 @@ export type MintEngineHealthPublicJson = {
     mainnetBroadcastEnabled: boolean;
     mainnetBeta: boolean;
     mainnetDryRun: boolean;
+    /** Effective stop: env OR persisted runtime (when DB read succeeds). */
     emergencyStop: boolean;
+    /** False when the runtime DB row could not be read; `emergencyStop` is then env-only (`MINT_EMERGENCY_STOP`). */
+    runtimeEmergencyStopAvailable: boolean;
     testnetOnly: boolean;
     signerConfigured: boolean;
     defaultChainId: number;
@@ -27,7 +29,22 @@ export type MintEngineHealthPublicJson = {
 };
 
 export async function buildMintEngineHealthPayload(prisma: PrismaClient): Promise<MintEngineHealthPublicJson> {
-    const emergencyStop = await getEffectiveEmergencyStop(prisma);
+    let emergencyStop: boolean;
+    let runtimeEmergencyStopAvailable: boolean;
+    if (mintEnv.MINT_EMERGENCY_STOP) {
+        emergencyStop = true;
+        runtimeEmergencyStopAvailable = true;
+    } else {
+        try {
+            const row = await prisma.mintEngineRuntimeState.findUnique({ where: { id: 'default' } });
+            emergencyStop = row?.emergencyStop === true;
+            runtimeEmergencyStopAvailable = true;
+        } catch {
+            emergencyStop = mintEnv.MINT_EMERGENCY_STOP;
+            runtimeEmergencyStopAvailable = false;
+        }
+    }
+
     const signer = new SignerAdapter();
     return {
         healthSchemaVersion: 2,
@@ -39,6 +56,7 @@ export async function buildMintEngineHealthPayload(prisma: PrismaClient): Promis
         mainnetBeta: mintEnv.MINT_MAINNET_BETA,
         mainnetDryRun: mintEnv.MINT_MAINNET_DRY_RUN,
         emergencyStop,
+        runtimeEmergencyStopAvailable,
         testnetOnly: mintEnv.MINT_TESTNET_ONLY,
         signerConfigured: signer.signerConfigured(),
         defaultChainId: mintEnv.MINT_DEFAULT_CHAIN_ID,

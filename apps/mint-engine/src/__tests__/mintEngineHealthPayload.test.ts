@@ -13,6 +13,7 @@ const REQUIRED_KEYS = [
     'mainnetBeta',
     'mainnetDryRun',
     'emergencyStop',
+    'runtimeEmergencyStopAvailable',
     'testnetOnly',
     'signerConfigured',
     'defaultChainId',
@@ -40,9 +41,24 @@ describe('mintEngineHealthPayload', () => {
         assert.equal(typeof p.mode, 'string');
         assert.equal(typeof p.executionEnabled, 'boolean');
         assert.equal(typeof p.healthSchemaVersion, 'number');
+        assert.equal(p.healthSchemaVersion, 2);
         assert.equal(typeof p.defaultChainId, 'number');
         assert.equal(typeof p.maxActiveJobs, 'number');
         assert.equal(typeof p.maxQuantity, 'number');
+        assert.equal(typeof p.runtimeEmergencyStopAvailable, 'boolean');
+    });
+
+    it('falls back to env emergency stop when prisma read fails', async () => {
+        const prisma = {
+            mintEngineRuntimeState: {
+                findUnique: async () => {
+                    throw new Error('db down');
+                },
+            },
+        } as unknown as PrismaClient;
+        const p = await buildMintEngineHealthPayload(prisma);
+        assert.equal(p.runtimeEmergencyStopAvailable, false);
+        assert.equal(typeof p.emergencyStop, 'boolean');
     });
 
     it('does not expose secrets or URLs in JSON keys', async () => {

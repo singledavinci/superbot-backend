@@ -29,5 +29,8 @@ if (!payloadSrc.includes('mainnetBroadcastEnabled')) {
 if (!payloadSrc.includes('healthSchemaVersion')) {
     fail('dist mintEngineHealthPayload.js missing healthSchemaVersion');
 }
+if (!payloadSrc.includes('runtimeEmergencyStopAvailable')) {
+    fail('dist mintEngineHealthPayload.js missing runtimeEmergencyStopAvailable');
+}
 
 console.log('[verify-mint-engine-dist] OK');
