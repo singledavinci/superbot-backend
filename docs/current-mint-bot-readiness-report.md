@@ -1,7 +1,7 @@
 # SuperBot / Supermint Mint Execution Readiness Report
 
 **Report refreshed:** 2026-05-13  
-**Repository:** `master` @ **`9be835087331f10749022dacb251d49aabf32219`** (includes this document + prior mint fixes)  
+**Repository:** `master` @ **`d98e841`** (report refresh commit; mint code changes land in **`b55bd88`** / **`65678be`** / **`9be8350`** ancestry)  
 **Working tree:** clean vs `origin/master` at refresh time  
 
 This is an **operator audit**. **No secret values** are printed. **Production** env and **`/mint-status`** text must be confirmed in **Railway** and **Discord** by the operator.
@@ -100,7 +100,7 @@ Mint-only Discord UX (names as operators know them; **current slash names** in r
 | Check | Value |
 |--------|--------|
 | **Current branch** | `master` |
-| **Latest commit hash** | `9be835087331f10749022dacb251d49aabf32219` |
+| **Latest commit hash** | `d98e841` (pushed) |
 | **Pushed** | Yes (`master...origin/master` clean at refresh) |
 | **Uncommitted changes** | None |
 
@@ -411,7 +411,7 @@ Flow (as requested; step 3 uses **current** slash name):
 
 **Status fixed; commands restored; signer configuration next**
 
-The **software path** for health, status, slash registration, and **policy gates** is in place on **`master`** / **`9be8350`**, and **Railway** showed mint services on that commit at last check. **Operational mainnet proof** still depends on **live signer**, **DB migration verification**, **approvals**, and **exercise** of dry-run / tx flows — which only the operator can complete safely.
+The **software path** for health, status, slash registration, and **policy gates** is in place on **`master`** (latest: **`d98e841`** for this doc). **Railway** last showed mint-engine / mint-executor on app commit **`9be8350`** — re-check after pulling **`d98e841`** (doc-only) or any newer code deploy. **Operational mainnet proof** still depends on **live signer**, **DB migration verification**, **approvals**, and **exercise** of dry-run / tx flows — which only the operator can complete safely.
 
 ---
 
