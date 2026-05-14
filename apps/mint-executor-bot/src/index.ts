@@ -116,7 +116,21 @@ export class MintExecutorBot {
         this.client.on(Events.InteractionCreate, async interaction => {
             if (!interaction.isChatInputCommand()) return;
             const cmd = this.commands.get(interaction.commandName);
-            if (!cmd) return;
+            if (!cmd) {
+                console.warn(
+                    `[MintExecutorBot] Unknown or unloaded slash command: ${interaction.commandName} (id=${interaction.commandId})`,
+                );
+                try {
+                    await interaction.reply({
+                        content:
+                            'This command is not available on this bot build (or failed to load). Check mint-executor deploy logs and command registration.',
+                        ephemeral: true,
+                    });
+                } catch (e) {
+                    console.error('[MintExecutorBot] Failed to reply for unknown command:', e);
+                }
+                return;
+            }
             const name = interaction.commandName;
             if (
                 [
