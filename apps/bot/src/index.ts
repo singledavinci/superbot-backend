@@ -864,7 +864,34 @@ export class SuperBot {
                     return;
                 }
 
+                // Never leave selects/modals unacknowledged (Discord shows "Interaction failed").
                 if (!interaction.isButton()) {
+                    const kind = interaction.isStringSelectMenu() ? 'select' : 'modal';
+                    console.warn(
+                        '[Bot] Unhandled component (no route):',
+                        interaction.customId,
+                        kind,
+                    );
+                    if (!interaction.replied && !interaction.deferred) {
+                        if (interaction.isStringSelectMenu()) {
+                            await interaction
+                                .update({
+                                    content:
+                                        'This setup menu is outdated — run `/track-collection` or `/guide` again.',
+                                    embeds: [],
+                                    components: [],
+                                })
+                                .catch(() => interaction.deferUpdate().catch(() => {}));
+                        } else {
+                            await interaction
+                                .reply({
+                                    content:
+                                        'This form is outdated — run the slash command again.',
+                                    flags: 64,
+                                })
+                                .catch(() => {});
+                        }
+                    }
                     return;
                 }
 

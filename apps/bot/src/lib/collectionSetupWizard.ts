@@ -119,7 +119,7 @@ export function buildCollectionSetupPayload(draft: CollectionSetupDraft, imageUr
         )
         .setFooter({ text: 'Alerts route via SuperBot Alerts channels · /alert-routes' });
 
-    if (imageUrl) embed.setThumbnail(imageUrl);
+    if (imageUrl && /^https?:\/\//i.test(imageUrl)) embed.setThumbnail(imageUrl);
 
     const rows = [
         selectRow('floor_drop', 'Floor drop %', draft.floorDropPct, PCT_OPTIONS),
@@ -231,12 +231,11 @@ export async function handleCollectionWizardInteraction(
     const userId = interaction.user.id;
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${PREFIX}:sel:`)) {
-        await interaction.deferUpdate();
         const field = interaction.customId.slice(`${PREFIX}:sel:`.length);
         const draft = await getCollectionDraft(guildId, userId);
         if (!draft) {
             wizardLog('select_expired', { field, guildId, userId });
-            await interaction.followUp({
+            await interaction.reply({
                 content: 'Setup expired — run `/track-collection` again.',
                 ...EPHEMERAL_REPLY,
             });
@@ -247,7 +246,7 @@ export async function handleCollectionWizardInteraction(
         else if (field === 'floor_rise') draft.floorRisePct = parsePctChoice(val);
         await setCollectionDraft(guildId, userId, draft);
         wizardLog('select', { field, val, floorDrop: draft.floorDropPct, floorRise: draft.floorRisePct });
-        await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
+        await interaction.update(buildCollectionSetupPayload(draft, draft.imageUrl));
         return true;
     }
 
@@ -367,10 +366,9 @@ export async function handleCollectionWizardInteraction(
     }
 
     if (interaction.isModalSubmit() && interaction.customId === `${PREFIX}:modal:custom`) {
-        await interaction.deferUpdate();
         const draft = await getCollectionDraft(guildId, userId);
         if (!draft) {
-            await interaction.followUp({
+            await interaction.reply({
                 content: 'Setup expired — run `/track-collection` again.',
                 ...EPHEMERAL_REPLY,
             });
@@ -382,7 +380,19 @@ export async function handleCollectionWizardInteraction(
         draft.floorRisePct = riseRaw ? Math.max(0, Number(riseRaw)) || null : null;
         await setCollectionDraft(guildId, userId, draft);
         wizardLog('modal_custom', { floorDrop: draft.floorDropPct, floorRise: draft.floorRisePct });
+        await interaction.deferUpdate();
         await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
+        return true;
+    }
+
+    if (interaction.customId.startsWith(PREFIX)) {
+        wizardLog('unknown_control', { customId: interaction.customId });
+        if (!interaction.replied && !interaction.deferred) {
+            await interaction.reply({
+                content: 'Unknown control — run `/track-collection` again for a fresh menu.',
+                ...EPHEMERAL_REPLY,
+            });
+        }
         return true;
     }
 

@@ -60,6 +60,12 @@ export async function routeComponentInteraction(
     interaction: StringSelectMenuInteraction | ButtonInteraction | ModalSubmitInteraction,
 ): Promise<boolean> {
     const id = interaction.customId;
+    const kind = interaction.isButton()
+        ? 'button'
+        : interaction.isStringSelectMenu()
+          ? 'select'
+          : 'modal';
+    console.log(`[Bot] component route id=${id} kind=${kind} user=${interaction.user.id}`);
 
     if (interaction.isButton() && id.startsWith(GUIDE_PREFIX)) {
         return handleGuideButton(interaction);
