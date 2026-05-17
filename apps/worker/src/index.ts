@@ -1504,35 +1504,55 @@ export class EventWorker {
         }
 
         if (currentMints === velocityThreshold) {
-            const mintChannels = await prisma.alertChannel.findMany({
-                where: { alertType: 'MINT_RADAR' },
-                include: { guild: true }
+            const tracked = await prisma.trackedCollection.findMany({
+                where: { chain, contract: contract.toLowerCase() },
+                include: { guild: { include: { alertChannels: true } } },
             });
+            if (tracked.length === 0) return;
 
-            // Use a deterministic time-bucketed eventId so dedupe works across worker replicas
             const bucket = Math.floor(Date.now() / (5 * 60 * 1000));
             const eventId = `mint-radar-${chain}-${contract}-${bucket}`;
-            // Mint radar carries no tokenId; collection metadata is the most we
-            // can enrich. One fetch shared across every guild's alert.
             const collectionMeta = await this.nftMetadata.fetchCollection(contract).catch(() => null);
             const { name: mintRadarCollectionName } = await this.collectionNames.resolve(
                 contract.toLowerCase(),
             );
-            for (const ch of mintChannels) {
-                await discordDeliveryQueue.add('discord_alert', {
-                    eventId,
-                    guildId: ch.guild.discordId,
-                    channelId: ch.discordChannelId,
-                    alertType: 'MINT_RADAR',
-                    chain, contract,
-                    velocity: currentMints,
-                    timeWindowMin: 5,
-                    collectionName: mintRadarCollectionName,
-                    collectionMeta,
-                    mentionRoleId: ch.mentionRoleId,
-                }, {
-                    jobId: `mint-alert-${chain}-${contract}-${bucket}`
+
+            const targets = new Map<
+                string,
+                { channelId: string; mentionRoleId: string | null; guildDiscordId: string }
+            >();
+            for (const row of tracked) {
+                const guild = row.guild;
+                if (!guild) continue;
+                const route = routeFor(guild.alertChannels as AlertChannelRow[], 'MINT_RADAR', {
+                    mentionRoleOverride: row.mentionRoleId,
                 });
+                if (!route.channelId) continue;
+                targets.set(guild.discordId, {
+                    channelId: route.channelId,
+                    mentionRoleId: route.mentionRoleId,
+                    guildDiscordId: guild.discordId,
+                });
+            }
+
+            for (const target of targets.values()) {
+                await discordDeliveryQueue.add(
+                    'discord_alert',
+                    {
+                        eventId,
+                        guildId: target.guildDiscordId,
+                        channelId: target.channelId,
+                        alertType: 'MINT_RADAR',
+                        chain,
+                        contract,
+                        velocity: currentMints,
+                        timeWindowMin: 5,
+                        collectionName: mintRadarCollectionName,
+                        collectionMeta,
+                        mentionRoleId: target.mentionRoleId,
+                    },
+                    { jobId: `mint-alert-${chain}-${contract}-${bucket}-${target.guildDiscordId}` },
+                );
             }
         }
     }

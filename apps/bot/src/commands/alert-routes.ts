@@ -5,7 +5,7 @@ import {
     EmbedBuilder,
 } from 'discord.js';
 import { prisma } from '@superbot/database';
-import { ALERT_ROUTE_PREFERENCE } from '@superbot/types';
+import { ALERT_ROUTE_PREFERENCE, resolveAlertRoute } from '@superbot/types';
 import { BRAND_ACCENT } from '../lib/embedTheme';
 
 const CHANNEL_LABELS: Record<string, string> = {
@@ -51,19 +51,29 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         return;
     }
 
-    const byType = new Map(guild.alertChannels.map(r => [r.alertType, r]));
+    const channels = guild.alertChannels;
+    const byType = new Map(channels.map(r => [r.alertType, r]));
     const lines: string[] = [];
 
     for (const alertType of Object.keys(ALERT_ROUTE_PREFERENCE)) {
-        const row = byType.get(alertType);
         const label = CHANNEL_LABELS[alertType] ?? alertType;
-        if (!row?.discordChannelId) {
-            lines.push(`**${label}**\n└ _Not configured_`);
+        const effective = resolveAlertRoute(channels, alertType);
+        const direct = byType.get(alertType);
+
+        if (!effective.channelId) {
+            lines.push(`**${label}**\n- _Not configured_`);
             continue;
         }
-        const ch = `<#${row.discordChannelId}>`;
-        const role = row.mentionRoleId ? `<@&${row.mentionRoleId}>` : '_No ping role_';
-        lines.push(`**${label}**\n└ Channel ${ch} · Ping ${role}`);
+
+        const ch = `<#${effective.channelId}>`;
+        const role = effective.mentionRoleId ? `<@&${effective.mentionRoleId}>` : '_No ping role_';
+        const viaFallback =
+            direct?.discordChannelId && direct.discordChannelId !== effective.channelId
+                ? ' _(effective route uses fallback)_'
+                : !direct?.discordChannelId
+                  ? ' _(via fallback type)_'
+                  : '';
+        lines.push(`**${label}**${viaFallback}\n- Channel ${ch} | Ping ${role}`);
     }
 
     const embed = new EmbedBuilder()
@@ -74,7 +84,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 lines.join('\n\n').slice(0, 3900),
         )
         .setFooter({
-            text: 'Stale per-collection channel overrides are ignored — routing uses this table.',
+            text: 'Per-collection channel overrides are ignored for specialized alerts.',
         })
         .setTimestamp();
 

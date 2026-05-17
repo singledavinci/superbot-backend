@@ -279,6 +279,8 @@ export class SuperBot {
                 content = `<@&${validatedRoleId}>`;
             }
 
+            let dispatched = false;
+
             if (alertType === 'WALLET_ACTION_BATCH') {
                 const bb = String(data.batchBehavior || 'buy') as 'buy' | 'sale' | 'mint';
                 const b = data.batch || {};
@@ -338,6 +340,7 @@ export class SuperBot {
                     components: [row],
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
+                dispatched = true;
             } else if (alertType === 'WHALE_BUY' || alertType === 'WHALE_SALE' || alertType === 'WHALE_MINT') {
                 const embed = createWhaleBuyEmbed({
                     contract: data.contract,
@@ -378,6 +381,7 @@ export class SuperBot {
                     components: [row],
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] }
                 });
+                dispatched = true;
             } else if (alertType === 'MINT_RADAR') {
                 const embed = createMintAlertEmbed({
                     contract: data.contract,
@@ -400,6 +404,7 @@ export class SuperBot {
                     components: [row],
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] }
                 });
+                dispatched = true;
             } else if (alertType === 'FLOOR_UPDATE') {
                 const embed = createFloorUpdateEmbed(data);
                 await channel.send({ 
@@ -407,6 +412,7 @@ export class SuperBot {
                     embeds: [embed],
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] }
                 });
+                dispatched = true;
             } else if (alertType === 'SWEEP') {
                 const embed = createSweepEmbed({
                     collectionName: data.collectionName,
@@ -442,6 +448,7 @@ export class SuperBot {
                     components: [row],
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
+                dispatched = true;
             } else if (alertType === 'MASS_LISTING') {
                 const massSlug = data.collectionMeta?.slug ?? null;
                 const embed = createMassListingEmbed({
@@ -475,6 +482,7 @@ export class SuperBot {
                         console.warn('[Delivery] Redis alert_discord_msg set failed:', e);
                     }
                 }
+                dispatched = true;
             } else if (alertType === 'MASS_DELIST') {
                 const slug = data.collectionMeta?.slug ?? null;
                 const embed = createMassDelistEmbed({
@@ -509,6 +517,7 @@ export class SuperBot {
                         console.warn('[Delivery] Redis alert_discord_msg set failed:', e);
                     }
                 }
+                dispatched = true;
             } else if (alertType === 'HOT_MINT') {
                 const slug = data.collectionMeta?.slug ?? null;
                 const embed = createHotMintEmbed({
@@ -543,6 +552,7 @@ export class SuperBot {
                     components: [row],
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
+                dispatched = true;
             } else if (alertType === 'FLOOR_DROP' || alertType === 'FLOOR_RISE') {
                 const embed = createFloorMovementEmbed({
                     collectionName: data.collectionName,
@@ -552,6 +562,7 @@ export class SuperBot {
                     pctChange: data.pctChange,
                     currency: data.currency,
                     direction: alertType === 'FLOOR_DROP' ? 'drop' : 'rise',
+                    collectionMeta: data.collectionMeta ?? null,
                     contextualExplanation: data.contextualExplanation ?? null,
                     aiNarrative: data.aiNarrative ?? undefined,
                 });
@@ -560,6 +571,7 @@ export class SuperBot {
                     embeds: [embed],
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
+                dispatched = true;
             } else if (alertType === 'OPPORTUNITY_SPIKE') {
                 const slug = data.collectionMeta?.slug ?? null;
                 const embed = createOpportunitySpikeEmbed({
@@ -595,6 +607,7 @@ export class SuperBot {
                     components: [row],
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
+                dispatched = true;
             } else if (alertType === 'CLUSTER_BUY') {
                 const triggerTxHash = String(data.triggerTxHash || data.txHash || '');
                 const embed = createClusterBuyEmbed({
@@ -640,6 +653,22 @@ export class SuperBot {
                     components,
                     allowedMentions: { roles: validatedRoleId ? [validatedRoleId] : [] },
                 });
+                dispatched = true;
+            }
+
+            if (!dispatched) {
+                console.warn(`[Delivery] Unhandled alertType="${alertType}" eventId=${eventId ?? 'n/a'}`);
+                if (deliveryKey) {
+                    await this.recordDelivery(
+                        deliveryKey,
+                        eventId!,
+                        channelId!,
+                        alertType,
+                        'failed',
+                        'unhandled_alert_type',
+                    );
+                }
+                return;
             }
 
             if (deliveryKey) {

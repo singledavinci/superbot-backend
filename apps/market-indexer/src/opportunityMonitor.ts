@@ -19,28 +19,7 @@ import {
     type OpportunityScoreEnv,
 } from '@superbot/analytics';
 import { explainOpportunitySpike, summarizeFactsWithOptionalAi } from '@superbot/intelligence';
-
-type AlertChannelRouting = { alertType: string; discordChannelId: string; mentionRoleId: string | null };
-
-function discordChannelForTypes(channels: AlertChannelRouting[], preferenceOrder: string[]): string | null {
-    for (const t of preferenceOrder) {
-        const row = channels.find(c => c.alertType === t);
-        if (row?.discordChannelId) return row.discordChannelId;
-    }
-    return null;
-}
-
-function mentionRoleForTypes(
-    channels: { alertType: string; mentionRoleId: string | null }[],
-    preferenceOrder: string[],
-): string | null {
-    for (const t of preferenceOrder) {
-        const row = channels.find(c => c.alertType === t);
-        const id = row?.mentionRoleId;
-        if (typeof id === 'string' && id.trim()) return id.trim();
-    }
-    return null;
-}
+import { resolveAlertRoute, type AlertChannelRow } from '@superbot/types';
 
 const ADDR_RE = /0x[a-fA-F0-9]{40}/gi;
 
@@ -201,13 +180,10 @@ export class OpportunityMonitorRunner {
             const env = mergeEnvWithGuild(baseEnv, og);
             const scored = scoreOpportunity(metrics, env);
             if (!scored.shouldAlert || scored.scoreClamped < env.scoreThreshold) continue;
-            const channelId =
-                og.channelDiscordId ??
-                discordChannelForTypes(guild.alertChannels as AlertChannelRouting[], [
-                    'OPPORTUNITY_SPIKE',
-                    'WHALE_BUY',
-                ]) ??
-                row.alertChannelId;
+            const oppRoute = resolveAlertRoute(guild.alertChannels as AlertChannelRow[], 'OPPORTUNITY_SPIKE', {
+                channelOverride: og.channelDiscordId ?? row?.alertChannelId,
+            });
+            const channelId = oppRoute.channelId;
             if (!channelId) continue;
             dispatchTargets.push({ guild, row, channelId });
         }
@@ -298,7 +274,7 @@ export class OpportunityMonitorRunner {
         buyers15: number;
         listingDelta: number | null;
         baseEnv: OpportunityScoreEnv;
-        guild: { id: string; settings: unknown; alertChannels: AlertChannelRouting[] };
+        guild: { id: string; settings: unknown; alertChannels: AlertChannelRow[] };
         row: { id: string; name: string; mentionRoleId: string | null; alertChannelId: string | null } | null;
         channelId: string;
     }) {
@@ -420,10 +396,9 @@ export class OpportunityMonitorRunner {
                     ? 'Thin or missing venue statistics; momentum signal remains unconfirmed in places.'
                     : 'OpenSea / indexer feeds can lag real trading.',
                 mentionRoleId:
-                    og.mentionRoleId ??
-                    mentionRoleForTypes(guild.alertChannels, ['OPPORTUNITY_SPIKE', 'WHALE_BUY']) ??
-                    row?.mentionRoleId ??
-                    null,
+                    resolveAlertRoute(guild.alertChannels as AlertChannelRow[], 'OPPORTUNITY_SPIKE', {
+                        mentionRoleOverride: og.mentionRoleId ?? row?.mentionRoleId,
+                    }).mentionRoleId ?? null,
                 contextualExplanation: cx,
                 aiNarrative: nar ?? undefined,
             },

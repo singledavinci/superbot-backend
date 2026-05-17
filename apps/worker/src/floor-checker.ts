@@ -113,6 +113,9 @@ export class FloorWorker {
                 if (prev && prev.priceNative > 0) {
                     const dropPct = ((prev.priceNative - current.priceNative) / prev.priceNative) * 100;
                     const risePct = ((current.priceNative - prev.priceNative) / prev.priceNative) * 100;
+                    const collectionMeta = await this.nftMetadata
+                        .fetchCollection(contract)
+                        .catch(() => null);
 
                     const gFloor = guildByIdFloor.get(item.guildId);
                     const dropRoute = resolveAlertRoute(
@@ -148,6 +151,7 @@ export class FloorWorker {
                                 alertType: 'FLOOR_DROP',
                                 contract,
                                 collectionName: floorDropCollName,
+                                collectionMeta,
                                 floorPrice: current.priceNative,
                                 prevFloor: prev.priceNative,
                                 pctChange: dropPct,
@@ -197,6 +201,7 @@ export class FloorWorker {
                                 alertType: 'FLOOR_RISE',
                                 contract,
                                 collectionName: floorRiseCollName,
+                                collectionMeta,
                                 floorPrice: current.priceNative,
                                 prevFloor: prev.priceNative,
                                 pctChange: risePct,

@@ -11,7 +11,14 @@ import {
     EMBED_COLORS,
     STANDARD_MARKET_DISCLAIMER,
     alertCategoryLine,
+    batchEmbedColor,
+    formatPctChange,
+    gradeAccentColor,
+    gradeBadge,
+    intensityBar,
+    scoreMeter,
     superbotFooter,
+    whaleEmbedColor,
 } from './lib/embedTheme';
 
 export { STANDARD_MARKET_DISCLAIMER };
@@ -138,16 +145,14 @@ export function createWalletActionBatchEmbed(data: {
 }) {
     const who = walletDisplay(data.walletProfile, data.wallet);
     const coll = data.collectionName || shortAddr(data.contract);
-    let titleLead = '🚨 Batch Buy';
-    let color: ColorResolvable = getGradeColor(data.intelligence?.grade);
-    if (data.batchBehavior === 'sale') {
-        titleLead = '🔻 Batch Sale';
-        color = 0xff4444;
-    } else if (data.batchBehavior === 'mint') {
-        titleLead = '🎨 Batch Mint';
-        color = 0x00ffee;
-    }
-    const title = `${titleLead} — ${who} ${data.batchBehavior === 'sale' ? 'sold' : data.batchBehavior === 'mint' ? 'minted' : 'bought'} ${data.batch.itemCount} × ${coll}`;
+    const behavior = data.batchBehavior;
+    const titleLead =
+        behavior === 'sale' ? '🔻 Batch sale' : behavior === 'mint' ? '🎨 Batch mint' : '🚨 Batch buy';
+    const color: ColorResolvable =
+        data.intelligence?.grade && behavior === 'buy'
+            ? gradeAccentColor(data.intelligence.grade)
+            : batchEmbedColor(behavior);
+    const title = `${titleLead} — ${who} ${behavior === 'sale' ? 'sold' : behavior === 'mint' ? 'minted' : 'bought'} ${data.batch.itemCount}× ${coll}`;
 
     const txCount = data.batch.txHashes.length;
     const windowMs = Math.max(0, data.batch.lastSeenAt - data.batch.firstSeenAt);
@@ -180,11 +185,18 @@ export function createWalletActionBatchEmbed(data: {
         embed.setAuthor({ name: data.label });
     }
 
+    const batchIntensity = intensityBar(Math.min(1, data.batch.itemCount / 20));
     embed.setDescription(
-        `**Signal:** \`${data.intelligence?.grade || 'Neutral'}\` · ` + descPieces.join(' '),
+        alertCategoryLine(
+            behavior === 'sale' ? 'Wallet batch · sales' : behavior === 'mint' ? 'Wallet batch · mints' : 'Wallet batch · buys',
+            `${data.batch.itemCount} items`,
+        ) +
+            `\n${gradeBadge(data.intelligence?.grade)}\n` +
+            descPieces.join(' '),
     );
 
     embed.addFields(
+        { name: 'Intensity', value: `${batchIntensity} (${data.batch.itemCount})`, inline: true },
         { name: 'Item count', value: String(data.batch.itemCount), inline: true },
         {
             name: 'Wallet',
@@ -246,13 +258,16 @@ export function createWalletActionBatchEmbed(data: {
         });
     }
 
-    embed.addFields({
-        name: '🧠 AI Context Engine',
-        value: `*${data.intelligence?.context || 'No context available.'}*`,
-    });
-
-    if (data.intelligence?.risk) {
-        embed.addFields({ name: '⚠️ Risk', value: `*${data.intelligence.risk}*` });
+    if (data.intelligence?.contextual) {
+        appendWhyItMattersEmbed(embed, data.intelligence.contextual, data.intelligence.aiNarrative);
+    } else {
+        embed.addFields({
+            name: '🧠 Context',
+            value: `*${data.intelligence?.context || 'No context available.'}*`,
+        });
+        if (data.intelligence?.risk) {
+            embed.addFields({ name: '⚠️ Risk', value: `*${data.intelligence.risk}*` });
+        }
     }
 
     if (data.batch.possibleWashTrading) {
@@ -293,16 +308,15 @@ export function createWhaleBuyEmbed(data: {
     walletProfile?: WalletProfile | null;
     counterpartyProfile?: WalletProfile | null;
 }) {
-    let titlePrefix = '🚨 Whale Entry';
-    let color = getGradeColor(data.intelligence?.grade);
-
-    if (data.alertType === 'WHALE_SALE') {
-        titlePrefix = '📉 Whale Sale';
-        color = '#ff4444';
-    } else if (data.alertType === 'WHALE_MINT') {
-        titlePrefix = '🚀 Whale Mint';
-        color = '#00ffee';
-    }
+    const titlePrefix =
+        data.alertType === 'WHALE_SALE'
+            ? '📉 Whale sale'
+            : data.alertType === 'WHALE_MINT'
+              ? '🚀 Whale mint'
+              : '🚨 Whale buy';
+    const color: ColorResolvable = data.intelligence?.grade
+        ? gradeAccentColor(data.intelligence.grade)
+        : whaleEmbedColor(data.alertType);
 
     const cn =
         data.collectionName?.trim() ? data.collectionName.trim() : formatFallbackCollectionName(data.contract);
@@ -325,9 +339,14 @@ export function createWhaleBuyEmbed(data: {
         embed.setAuthor({ name: data.label });
     }
 
+    const categoryLabel =
+        data.alertType === 'WHALE_SALE'
+            ? 'Whale sale'
+            : data.alertType === 'WHALE_MINT'
+              ? 'Whale mint'
+              : 'Whale buy';
     embed.setDescription(
-        `**Signal:** \`${data.intelligence?.grade || 'Neutral'}\` · ` +
-            `**Collection:** ${collectionLabel}`,
+        alertCategoryLine(categoryLabel, collectionLabel) + `\n${gradeBadge(data.intelligence?.grade)}`,
     );
 
     embed.addFields(
@@ -529,16 +548,20 @@ export function createMintAlertEmbed(data: {
     const label = data.collectionName?.trim()
         ? data.collectionName.trim()
         : formatFallbackCollectionName(data.contract);
+    const velocityBar = intensityBar(Math.min(1, data.velocity / 50));
     const embed = new EmbedBuilder()
         .setColor(EMBED_COLORS.mint)
         .setTitle(`📈 Mint radar — ${label}`)
-        .setDescription(alertCategoryLine('High-velocity mint', `${data.velocity} mints / ${data.timeWindowMin} min`))
+        .setDescription(
+            alertCategoryLine('High-velocity mint', `${data.velocity} mints / ${data.timeWindowMin} min`) +
+                `\n${velocityBar} **${data.velocity}** mints in window`,
+        )
         .addFields(
             { name: 'Collection', value: label, inline: true },
             { name: 'Chain', value: data.chain, inline: true },
             {
                 name: 'Velocity',
-                value: `${data.velocity} mints / ${data.timeWindowMin} min`,
+                value: `${velocityBar}\n${data.velocity} / ${data.timeWindowMin} min`,
                 inline: true,
             },
             { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: true },
@@ -556,8 +579,10 @@ export function createMintAlertEmbed(data: {
     }
 
     embed.addFields({
-        name: '🧠 AI Context Engine',
-        value: `*Contract is receiving rapid mint volume. Verify contract age and source before interacting.*`,
+        name: '⚡ Takeaway',
+        value:
+            'Rapid mint velocity on a **tracked** collection — verify contract source, royalties, and liquidity before interacting.',
+        inline: false,
     });
 
     embed.addFields({
@@ -690,11 +715,13 @@ export function createMassListingEmbed(data: {
             ? `${data.floorBeforeEth.toFixed(4)} ETH`
             : null;
 
+    const surgeBar = intensityBar(Math.min(1, data.listingCount / 30));
     const embed = new EmbedBuilder()
         .setColor(EMBED_COLORS.listing)
         .setTitle(`📊 Listing surge — ${data.collectionName}`)
         .setDescription(
-            alertCategoryLine('Listing surge', `${data.listingCount} new listings / ~${mins} min`),
+            alertCategoryLine('Listing surge', `${data.listingCount} new / ~${mins} min`) +
+                `\n${surgeBar} supply hitting the market`,
         );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
@@ -749,12 +776,13 @@ export function createMassDelistEmbed(data: {
             ? `${data.floorBeforeEth.toFixed(4)} ETH`
             : null;
 
+    const delistBar = intensityBar(Math.min(1, data.delistCount / 30));
     const embed = new EmbedBuilder()
         .setColor(EMBED_COLORS.delist)
         .setTitle(`📊 Delist surge — ${data.collectionName}`)
         .setDescription(
-            alertCategoryLine('Delist surge', `${data.delistCount} delists / ~${mins} min`) +
-                '\n\nListings were pulled — supply on market is tightening.',
+            alertCategoryLine('Delist surge', `${data.delistCount} pulled / ~${mins} min`) +
+                `\n${delistBar} listings removed — market supply tightening.`,
         );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
@@ -805,27 +833,23 @@ export function createFloorImpactFollowupEmbed(data: {
         typeof data.floorAfter === 'number' && data.floorAfter > 0
             ? `${data.floorAfter.toFixed(4)} ETH`
             : '—';
-    const ch =
-        data.pctChange !== null && !Number.isNaN(data.pctChange)
-            ? `${data.pctChange >= 0 ? '+' : ''}${data.pctChange.toFixed(2)}%`
-            : '—';
-
     const coll = data.collectionName?.trim()
         ? data.collectionName.trim()
         : formatFallbackCollectionName(data.contract);
 
+    const contextLabel =
+        data.alertType === 'MASS_DELIST' ? 'After delist surge' : 'After listing surge';
     const embed = new EmbedBuilder()
         .setColor(colorHex)
-        .setTitle('Floor observation (10 min later)')
+        .setTitle(`📉 Floor check · 10 min later`)
         .setDescription(
-            data.contract
-                ? `**${coll}** · Contract \`${shortAddr(data.contract)}\``
-                : `**${coll}**`,
+            alertCategoryLine(contextLabel, coll) +
+                (data.contract ? `\n\`${shortAddr(data.contract)}\`` : ''),
         )
         .addFields(
             { name: 'Floor before', value: before, inline: true },
             { name: 'Floor now', value: after, inline: true },
-            { name: 'Change', value: ch, inline: true },
+            { name: 'Change', value: formatPctChange(data.pctChange), inline: true },
         )
         .setTimestamp();
 
@@ -833,7 +857,7 @@ export function createFloorImpactFollowupEmbed(data: {
         appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
     }
 
-    embed.setFooter({ text: `SuperBot • ${STANDARD_MARKET_DISCLAIMER}` });
+    embed.setFooter({ text: superbotFooter('Floor follow-up') });
 
     return embed;
 }
@@ -947,17 +971,19 @@ export function createOpportunitySpikeEmbed(data: {
         : formatFallbackCollectionName(data.contract);
     const slug = data.collectionMeta?.slug?.trim() || null;
     const embed = new EmbedBuilder()
-        .setColor(0x6366f1)
-        .setTitle('Collection Opportunity Spike Detected')
-        .setDescription(`**${coll}** · \`${shortAddr(data.contract)}\``);
+        .setColor(EMBED_COLORS.opportunity)
+        .setTitle(`📡 Opportunity spike — ${coll}`)
+        .setDescription(
+            alertCategoryLine('Momentum watch', data.signal) +
+                `\n${scoreMeter(data.score)}\n\`${shortAddr(data.contract)}\``,
+        );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
     if (thumb) embed.setThumbnail(thumb);
 
     embed.addFields(
-        { name: 'Collection', value: coll, inline: false },
+        { name: 'Score', value: scoreMeter(data.score), inline: false },
         { name: 'Signal', value: data.signal, inline: true },
-        { name: 'Opportunity score', value: String(data.score), inline: true },
         { name: 'Confidence', value: data.confidence, inline: true },
         { name: 'Time window', value: data.timeWindow, inline: true },
         { name: 'Volume change', value: data.volumeChange, inline: true },
@@ -980,9 +1006,7 @@ export function createOpportunitySpikeEmbed(data: {
         appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
     }
 
-    return embed.setTimestamp().setFooter({
-        text: `SuperBot • ${STANDARD_MARKET_DISCLAIMER}`,
-    });
+    return embed.setTimestamp().setFooter({ text: superbotFooter('Opportunity spikes') });
 }
 
 export function createFloorMovementEmbed(data: {
@@ -993,12 +1017,13 @@ export function createFloorMovementEmbed(data: {
     pctChange: number;
     currency: string;
     direction: 'drop' | 'rise';
+    collectionMeta?: CollectionMetadata | null;
     contextualExplanation?: ContextualExplanation | null;
     aiNarrative?: string | null;
 }) {
     const isDrop = data.direction === 'drop';
     const title = isDrop ? '📉 Floor dropped' : '📈 Floor climbed';
-    const color = isDrop ? '#ef4444' : '#22c55e';
+    const color = isDrop ? EMBED_COLORS.floorDrop : EMBED_COLORS.floorRise;
 
     const cn = data.collectionName?.trim()
         ? data.collectionName.trim()
@@ -1006,22 +1031,30 @@ export function createFloorMovementEmbed(data: {
 
     const embed = new EmbedBuilder()
         .setColor(color)
-        .setTitle(title)
-        .setDescription(`**${cn}**`)
+        .setTitle(`${title} — ${cn}`)
+        .setDescription(
+            alertCategoryLine(
+                isDrop ? 'Floor drop' : 'Floor rise',
+                formatPctChange(data.pctChange),
+            ),
+        )
         .addFields(
             { name: 'Floor now', value: `${data.floorPrice} ${data.currency}`, inline: true },
             { name: 'Previous', value: `${data.prevFloor} ${data.currency}`, inline: true },
-            { name: 'Move', value: `${data.pctChange.toFixed(2)}%`, inline: true },
+            { name: 'Move', value: formatPctChange(data.pctChange), inline: true },
             { name: 'Contract', value: `\`${shortAddr(data.contract)}\``, inline: false },
-            { name: 'Links', value: markdownCollectionToolkit(data.contract, null), inline: false },
+            { name: 'Links', value: markdownCollectionToolkit(data.contract, data.collectionMeta?.slug ?? null), inline: false },
         )
         .setTimestamp();
+
+    const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
+    if (thumb) embed.setThumbnail(thumb);
 
     if (data.contextualExplanation) {
         appendWhyItMattersEmbed(embed, data.contextualExplanation, data.aiNarrative);
     }
 
-    embed.setFooter({ text: `SuperBot Market Data • ${STANDARD_MARKET_DISCLAIMER}` });
+    embed.setFooter({ text: superbotFooter('Floor alerts') });
     return embed;
 }
 
@@ -1085,23 +1118,3 @@ function buildExternalLinks(args: {
     return parts.length > 0 ? parts.join(' · ') : null;
 }
 
-function getGradeColor(grade?: string): any {
-    switch (grade) {
-        case 'Strong Bullish':
-            return '#00ff00';
-        case 'Weak Bullish':
-            return '#90ee90';
-        case 'Neutral':
-            return '#808080';
-        case 'Weak Bearish':
-            return '#ffcccb';
-        case 'Strong Bearish':
-            return '#ff0000';
-        case 'High Risk':
-            return '#ffa500';
-        case 'Suspicious Activity':
-            return '#ff00ff';
-        default:
-            return '#00ff00';
-    }
-}

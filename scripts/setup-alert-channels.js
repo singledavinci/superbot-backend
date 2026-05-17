@@ -19,12 +19,13 @@ const BLM_CONTRACT = '0xfa52a2850b822747e3f49ea781c6a45a2aaa4c0b';
 const PLAN = [
     { channel: '📈-mint-radar', types: ['MINT_RADAR'], topic: 'Tracked-collection mint events.' },
     { channel: '🔥-hot-mints', types: ['HOT_MINT'], topic: 'Aggressively-minting collections (trending) detected on-chain.' },
-    { channel: '🐋-whale-trades', types: ['WHALE_BUY', 'WHALE_SALE'], topic: 'Tracked whale wallets buying / selling.' },
+    { channel: '🐋-whale-trades', types: ['WHALE_BUY', 'WHALE_SALE', 'WHALE_MINT'], topic: 'Tracked whale wallets buying / selling / minting.' },
     { channel: '🧮-wallet-batches', types: ['WALLET_ACTION_BATCH'], topic: 'Coalesced batches when a whale acts on many items in a short window.' },
     { channel: '🧠-cluster-buys', types: ['CLUSTER_BUY'], topic: 'Multiple smart-money wallets buying the same collection in a tight window.' },
     { channel: '💰-sweeps', types: ['SWEEP'], topic: 'Large sweep buys on tracked collections.' },
     { channel: '📊-listing-activity', types: ['MASS_LISTING', 'MASS_DELIST', 'FLOOR_IMPACT_FOLLOWUP'], topic: 'Mass listings & mass delistings on tracked collections (with floor-impact follow-ups).' },
     { channel: '📉-floor-alerts', types: ['FLOOR_DROP', 'FLOOR_RISE'], topic: 'Floor price drops & rises on tracked collections.' },
+    { channel: '📡-opportunities', types: ['OPPORTUNITY_SPIKE'], topic: 'Momentum / opportunity spikes on tracked collections.' },
 ];
 
 async function discord(method, path, token, body) {
