@@ -30,6 +30,22 @@ import {
 
 const PREFIX = 'collwiz';
 
+function wizardLog(step: string, data: Record<string, unknown>) {
+    const line = JSON.stringify({
+        sessionId: '482b27',
+        location: `collectionSetupWizard:${step}`,
+        message: step,
+        data,
+        timestamp: Date.now(),
+    });
+    console.log(`[Wizard] ${line}`);
+    fetch('http://127.0.0.1:7317/ingest/2a91f8bc-a1ce-4ea6-8234-d779e4605c12', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '482b27' },
+        body: line,
+    }).catch(() => {});
+}
+
 let resolver: CollectionNameResolver | null = null;
 function getResolver(): CollectionNameResolver {
     if (!resolver) {
@@ -108,44 +124,22 @@ export function buildCollectionSetupPayload(draft: CollectionSetupDraft, imageUr
     const rows = [
         selectRow('floor_drop', 'Floor drop %', draft.floorDropPct, PCT_OPTIONS),
         selectRow('floor_rise', 'Floor rise %', draft.floorRisePct, PCT_OPTIONS),
-        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-            new StringSelectMenuBuilder()
-                .setCustomId(`${PREFIX}:sel:hot_mint`)
-                .setPlaceholder('Hot mint alerts')
-                .addOptions(
-                    new StringSelectMenuOptionBuilder()
-                        .setLabel('On')
-                        .setValue('on')
-                        .setDefault(draft.hotMintEnabled),
-                    new StringSelectMenuOptionBuilder()
-                        .setLabel('Off')
-                        .setValue('off')
-                        .setDefault(!draft.hotMintEnabled),
-                ),
-        ),
-        new ActionRowBuilder<StringSelectMenuBuilder>().addComponents(
-            new StringSelectMenuBuilder()
-                .setCustomId(`${PREFIX}:sel:delist`)
-                .setPlaceholder('Delist surge alerts')
-                .addOptions(
-                    new StringSelectMenuOptionBuilder()
-                        .setLabel('On')
-                        .setValue('on')
-                        .setDefault(draft.delistEnabled),
-                    new StringSelectMenuOptionBuilder()
-                        .setLabel('Off')
-                        .setValue('off')
-                        .setDefault(!draft.delistEnabled),
-                ),
-        ),
         new ActionRowBuilder<ButtonBuilder>().addComponents(
+            new ButtonBuilder()
+                .setCustomId(`${PREFIX}:btn:toggle_hot`)
+                .setLabel(`Hot mint: ${draft.hotMintEnabled ? 'On' : 'Off'}`)
+                .setStyle(ButtonStyle.Secondary),
+            new ButtonBuilder()
+                .setCustomId(`${PREFIX}:btn:toggle_delist`)
+                .setLabel(`Delist: ${draft.delistEnabled ? 'On' : 'Off'}`)
+                .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId(`${PREFIX}:btn:save`)
                 .setLabel('Save & track')
                 .setStyle(ButtonStyle.Success),
             new ButtonBuilder()
                 .setCustomId(`${PREFIX}:btn:custom`)
-                .setLabel('Custom thresholds')
+                .setLabel('Custom %')
                 .setStyle(ButtonStyle.Secondary),
             new ButtonBuilder()
                 .setCustomId(`${PREFIX}:btn:cancel`)
@@ -181,11 +175,12 @@ export async function startCollectionSetupWizard(
         floorRisePct: 10,
         hotMintEnabled: true,
         delistEnabled: true,
+        imageUrl: collectionMeta?.imageUrl ?? null,
     };
     await setCollectionDraft(guildDiscordId, userId, draft);
+    wizardLog('start', { contract: draft.contract, guildId: guildDiscordId, userId });
 
-    const thumb = collectionMeta?.imageUrl ?? null;
-    return buildCollectionSetupPayload(draft, thumb);
+    return buildCollectionSetupPayload(draft, draft.imageUrl);
 }
 
 export async function persistTrackedCollection(
@@ -236,10 +231,12 @@ export async function handleCollectionWizardInteraction(
     const userId = interaction.user.id;
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${PREFIX}:sel:`)) {
+        await interaction.deferUpdate();
         const field = interaction.customId.slice(`${PREFIX}:sel:`.length);
         const draft = await getCollectionDraft(guildId, userId);
         if (!draft) {
-            await interaction.reply({
+            wizardLog('select_expired', { field, guildId, userId });
+            await interaction.followUp({
                 content: 'Setup expired — run `/track-collection` again.',
                 ...EPHEMERAL_REPLY,
             });
@@ -248,18 +245,45 @@ export async function handleCollectionWizardInteraction(
         const val = interaction.values[0];
         if (field === 'floor_drop') draft.floorDropPct = parsePctChoice(val);
         else if (field === 'floor_rise') draft.floorRisePct = parsePctChoice(val);
-        else if (field === 'hot_mint') draft.hotMintEnabled = val === 'on';
-        else if (field === 'delist') draft.delistEnabled = val === 'on';
         await setCollectionDraft(guildId, userId, draft);
-        await interaction.deferUpdate();
-        const meta = await new NFTMetadataClient({ redis: redisConnection })
-            .fetchCollection(draft.contract)
-            .catch(() => null);
-        await interaction.editReply(buildCollectionSetupPayload(draft, meta?.imageUrl ?? null));
+        wizardLog('select', { field, val, floorDrop: draft.floorDropPct, floorRise: draft.floorRisePct });
+        await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
         return true;
     }
 
     if (interaction.isButton()) {
+        if (interaction.customId === `${PREFIX}:btn:toggle_hot`) {
+            const draft = await getCollectionDraft(guildId, userId);
+            if (!draft) {
+                await interaction.reply({
+                    content: 'Setup expired — run `/track-collection` again.',
+                    ...EPHEMERAL_REPLY,
+                });
+                return true;
+            }
+            draft.hotMintEnabled = !draft.hotMintEnabled;
+            await setCollectionDraft(guildId, userId, draft);
+            wizardLog('toggle_hot', { enabled: draft.hotMintEnabled });
+            await interaction.update(buildCollectionSetupPayload(draft, draft.imageUrl));
+            return true;
+        }
+
+        if (interaction.customId === `${PREFIX}:btn:toggle_delist`) {
+            const draft = await getCollectionDraft(guildId, userId);
+            if (!draft) {
+                await interaction.reply({
+                    content: 'Setup expired — run `/track-collection` again.',
+                    ...EPHEMERAL_REPLY,
+                });
+                return true;
+            }
+            draft.delistEnabled = !draft.delistEnabled;
+            await setCollectionDraft(guildId, userId, draft);
+            wizardLog('toggle_delist', { enabled: draft.delistEnabled });
+            await interaction.update(buildCollectionSetupPayload(draft, draft.imageUrl));
+            return true;
+        }
+
         if (interaction.customId === `${PREFIX}:btn:cancel`) {
             await clearCollectionDraft(guildId, userId);
             await interaction.update({
@@ -307,18 +331,20 @@ export async function handleCollectionWizardInteraction(
         }
 
         if (interaction.customId === `${PREFIX}:btn:save`) {
+            await interaction.deferUpdate();
             const draft = await getCollectionDraft(guildId, userId);
             if (!draft) {
-                await interaction.reply({
+                wizardLog('save_expired', { guildId, userId });
+                await interaction.followUp({
                     content: 'Setup expired — run `/track-collection` again.',
                     ...EPHEMERAL_REPLY,
                 });
                 return true;
             }
-            await interaction.deferUpdate();
             try {
                 const { collectionName, channelId } = await persistTrackedCollection(guildId, draft);
                 await clearCollectionDraft(guildId, userId);
+                wizardLog('save_ok', { contract: draft.contract, collectionName });
                 const done = new EmbedBuilder()
                     .setColor(0x22c55e)
                     .setTitle('Collection tracked')
@@ -333,6 +359,7 @@ export async function handleCollectionWizardInteraction(
                 await interaction.editReply({ embeds: [done], components: [] });
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : 'Save failed';
+                wizardLog('save_error', { error: msg });
                 await interaction.editReply({ content: `Error: ${msg}`, embeds: [], components: [] });
             }
             return true;
@@ -340,9 +367,10 @@ export async function handleCollectionWizardInteraction(
     }
 
     if (interaction.isModalSubmit() && interaction.customId === `${PREFIX}:modal:custom`) {
+        await interaction.deferUpdate();
         const draft = await getCollectionDraft(guildId, userId);
         if (!draft) {
-            await interaction.reply({
+            await interaction.followUp({
                 content: 'Setup expired — run `/track-collection` again.',
                 ...EPHEMERAL_REPLY,
             });
@@ -353,11 +381,8 @@ export async function handleCollectionWizardInteraction(
         draft.floorDropPct = dropRaw ? Math.max(0, Number(dropRaw)) || null : null;
         draft.floorRisePct = riseRaw ? Math.max(0, Number(riseRaw)) || null : null;
         await setCollectionDraft(guildId, userId, draft);
-        await interaction.deferUpdate();
-        const meta = await new NFTMetadataClient({ redis: redisConnection })
-            .fetchCollection(draft.contract)
-            .catch(() => null);
-        await interaction.editReply(buildCollectionSetupPayload(draft, meta?.imageUrl ?? null));
+        wizardLog('modal_custom', { floorDrop: draft.floorDropPct, floorRise: draft.floorRisePct });
+        await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
         return true;
     }
 

@@ -37,13 +37,13 @@ export const GUIDE_PAGES: GuidePage[] = [
             {
                 name: 'Floor alerts',
                 value:
-                    'Choose **floor drop %** and **floor rise %** from the dropdowns (e.g. 10% = alert when floor moves ≥10%). Set **Off** to disable that direction.',
+                    'Use the **Floor drop %** and **Floor rise %** dropdowns (e.g. 10 = alert when floor moves ≥10%). Pick **Off** to disable that direction. **Custom %** opens a form for exact values.',
                 inline: false,
             },
             {
                 name: 'Market surges',
                 value:
-                    'Toggle **hot mint** and **delist surge** alerts. Listing/sweep thresholds use guild defaults unless you use advanced `/floor-alert` subcommands.',
+                    'Tap **Hot mint: On/Off** and **Delist: On/Off** buttons to toggle those alert types. Listing/sweep thresholds use guild defaults unless you use `/floor-alert`.',
                 inline: false,
             },
             {

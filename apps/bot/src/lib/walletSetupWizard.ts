@@ -155,7 +155,10 @@ export async function handleWalletWizardInteraction(
     if (interaction.isModalSubmit() && interaction.customId === `${PREFIX}:modal:label`) {
         const draft = await getWalletDraft(guildId, userId);
         if (!draft) {
-            await interaction.reply({ content: 'Setup expired — run `/track-wallet` again.', ephemeral: true });
+            await interaction.reply({
+                content: 'Setup expired — run `/track-wallet` again.',
+                ...EPHEMERAL_REPLY,
+            });
             return true;
         }
         draft.label = interaction.fields.getTextInputValue('label').trim().slice(0, 32) || null;

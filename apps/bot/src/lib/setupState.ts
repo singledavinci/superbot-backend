@@ -9,6 +9,7 @@ export type CollectionSetupDraft = {
     floorRisePct: number | null;
     hotMintEnabled: boolean;
     delistEnabled: boolean;
+    imageUrl?: string | null;
 };
 
 export type WalletSetupDraft = {
