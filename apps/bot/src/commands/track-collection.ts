@@ -2,6 +2,7 @@ import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits }
 import { ethers } from 'ethers';
 import { prisma } from '@superbot/database';
 import { startCollectionSetupWizard } from '../lib/collectionSetupWizard';
+import { EPHEMERAL_REPLY } from '../lib/interactionReply';
 
 export const data = new SlashCommandBuilder()
     .setName('track-collection')
@@ -21,7 +22,7 @@ export const data = new SlashCommandBuilder()
     );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(EPHEMERAL_REPLY);
 
     const contract = interaction.options.getString('contract', true).toLowerCase().trim();
     const nameHint = interaction.options.getString('name');

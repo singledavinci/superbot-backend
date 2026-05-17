@@ -20,6 +20,7 @@ import {
     createRpcPoolFromEnv,
 } from '@superbot/analytics';
 import { BRAND_ACCENT } from './embedTheme';
+import { EPHEMERAL_REPLY } from './interactionReply';
 import {
     clearCollectionDraft,
     getCollectionDraft,
@@ -153,7 +154,7 @@ export function buildCollectionSetupPayload(draft: CollectionSetupDraft, imageUr
         ),
     ];
 
-    return { embeds: [embed], components: rows, ephemeral: true };
+    return { embeds: [embed], components: rows };
 }
 
 export async function startCollectionSetupWizard(
@@ -167,7 +168,6 @@ export async function startCollectionSetupWizard(
         | ActionRowBuilder<StringSelectMenuBuilder>
         | ActionRowBuilder<ButtonBuilder>
     )[];
-    ephemeral: boolean;
 }> {
     const meta = await getResolver().resolve(contract, { trackedName: nameHint ?? undefined });
     const collectionMeta = await new NFTMetadataClient({ redis: redisConnection })
@@ -239,7 +239,10 @@ export async function handleCollectionWizardInteraction(
         const field = interaction.customId.slice(`${PREFIX}:sel:`.length);
         const draft = await getCollectionDraft(guildId, userId);
         if (!draft) {
-            await interaction.reply({ content: 'Setup expired — run `/track-collection` again.', ephemeral: true });
+            await interaction.reply({
+                content: 'Setup expired — run `/track-collection` again.',
+                ...EPHEMERAL_REPLY,
+            });
             return true;
         }
         const val = interaction.values[0];
@@ -270,7 +273,10 @@ export async function handleCollectionWizardInteraction(
         if (interaction.customId === `${PREFIX}:btn:custom`) {
             const draft = await getCollectionDraft(guildId, userId);
             if (!draft) {
-                await interaction.reply({ content: 'Setup expired — run `/track-collection` again.', ephemeral: true });
+                await interaction.reply({
+                    content: 'Setup expired — run `/track-collection` again.',
+                    ...EPHEMERAL_REPLY,
+                });
                 return true;
             }
             const modal = new ModalBuilder()
@@ -303,7 +309,10 @@ export async function handleCollectionWizardInteraction(
         if (interaction.customId === `${PREFIX}:btn:save`) {
             const draft = await getCollectionDraft(guildId, userId);
             if (!draft) {
-                await interaction.reply({ content: 'Setup expired — run `/track-collection` again.', ephemeral: true });
+                await interaction.reply({
+                    content: 'Setup expired — run `/track-collection` again.',
+                    ...EPHEMERAL_REPLY,
+                });
                 return true;
             }
             await interaction.deferUpdate();
@@ -333,7 +342,10 @@ export async function handleCollectionWizardInteraction(
     if (interaction.isModalSubmit() && interaction.customId === `${PREFIX}:modal:custom`) {
         const draft = await getCollectionDraft(guildId, userId);
         if (!draft) {
-            await interaction.reply({ content: 'Setup expired — run `/track-collection` again.', ephemeral: true });
+            await interaction.reply({
+                content: 'Setup expired — run `/track-collection` again.',
+                ...EPHEMERAL_REPLY,
+            });
             return true;
         }
         const dropRaw = interaction.fields.getTextInputValue('floor_drop').trim();

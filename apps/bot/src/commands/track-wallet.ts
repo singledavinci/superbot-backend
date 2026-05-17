@@ -2,6 +2,7 @@ import { SlashCommandBuilder, ChatInputCommandInteraction, PermissionFlagsBits }
 import { ethers } from 'ethers';
 import { prisma } from '@superbot/database';
 import { startWalletSetupWizard } from '../lib/walletSetupWizard';
+import { EPHEMERAL_REPLY } from '../lib/interactionReply';
 
 export const data = new SlashCommandBuilder()
     .setName('track-wallet')
@@ -12,7 +13,7 @@ export const data = new SlashCommandBuilder()
     );
 
 export async function execute(interaction: ChatInputCommandInteraction) {
-    await interaction.deferReply({ ephemeral: true });
+    await interaction.deferReply(EPHEMERAL_REPLY);
 
     const address = interaction.options.getString('address', true).toLowerCase().trim();
     const guildId = interaction.guildId!;

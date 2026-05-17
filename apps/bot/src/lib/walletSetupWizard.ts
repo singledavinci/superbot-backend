@@ -11,6 +11,7 @@ import {
 } from 'discord.js';
 import { prisma } from '@superbot/database';
 import { BRAND_ACCENT } from './embedTheme';
+import { EPHEMERAL_REPLY } from './interactionReply';
 import { clearWalletDraft, getWalletDraft, setWalletDraft, type WalletSetupDraft } from './setupState';
 
 const PREFIX = 'walletwiz';
@@ -41,14 +42,14 @@ export function buildWalletSetupPayload(draft: WalletSetupDraft) {
             .setStyle(ButtonStyle.Danger),
     );
 
-    return { embeds: [embed], components: [row], ephemeral: true };
+    return { embeds: [embed], components: [row] };
 }
 
 export async function startWalletSetupWizard(
     guildDiscordId: string,
     userId: string,
     address: string,
-): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[]; ephemeral: boolean }> {
+): Promise<{ embeds: EmbedBuilder[]; components: ActionRowBuilder<ButtonBuilder>[] }> {
     const draft: WalletSetupDraft = { address: address.toLowerCase(), label: null };
     await setWalletDraft(guildDiscordId, userId, draft);
     return buildWalletSetupPayload(draft);
@@ -98,7 +99,10 @@ export async function handleWalletWizardInteraction(
         if (interaction.customId === `${PREFIX}:btn:label`) {
             const draft = await getWalletDraft(guildId, userId);
             if (!draft) {
-                await interaction.reply({ content: 'Setup expired — run `/track-wallet` again.', ephemeral: true });
+                await interaction.reply({
+                    content: 'Setup expired — run `/track-wallet` again.',
+                    ...EPHEMERAL_REPLY,
+                });
                 return true;
             }
             const modal = new ModalBuilder().setCustomId(`${PREFIX}:modal:label`).setTitle('Wallet label');
@@ -120,7 +124,10 @@ export async function handleWalletWizardInteraction(
         if (interaction.customId === `${PREFIX}:btn:save`) {
             const draft = await getWalletDraft(guildId, userId);
             if (!draft) {
-                await interaction.reply({ content: 'Setup expired — run `/track-wallet` again.', ephemeral: true });
+                await interaction.reply({
+                    content: 'Setup expired — run `/track-wallet` again.',
+                    ...EPHEMERAL_REPLY,
+                });
                 return true;
             }
             await interaction.deferUpdate();

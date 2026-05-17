@@ -845,8 +845,22 @@ export class SuperBot {
                     }
                 }
             } else if (interaction.isStringSelectMenu() || interaction.isButton() || interaction.isModalSubmit()) {
-                const { routeComponentInteraction } = await import('./lib/componentInteractions');
-                if (await routeComponentInteraction(interaction)) {
+                try {
+                    const { routeComponentInteraction } = await import('./lib/componentInteractions');
+                    if (await routeComponentInteraction(interaction)) {
+                        return;
+                    }
+                } catch (wizardErr) {
+                    console.error('[Bot] Wizard interaction failed:', wizardErr);
+                    const msg =
+                        wizardErr instanceof Error
+                            ? wizardErr.message
+                            : 'Something went wrong with this menu.';
+                    if (interaction.replied || interaction.deferred) {
+                        await interaction.followUp({ content: msg, flags: 64 }).catch(() => {});
+                    } else {
+                        await interaction.reply({ content: msg, flags: 64 }).catch(() => {});
+                    }
                     return;
                 }
 

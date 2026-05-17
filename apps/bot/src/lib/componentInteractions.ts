@@ -7,6 +7,7 @@ import {
     type StringSelectMenuInteraction,
 } from 'discord.js';
 import { buildGuideEmbed, GUIDE_PAGES } from './guideContent';
+import { EPHEMERAL_REPLY } from './interactionReply';
 import {
     handleCollectionWizardInteraction,
     isCollectionWizardInteraction,
@@ -51,7 +52,7 @@ export function buildGuideReply(page = 0) {
     return {
         embeds: [buildGuideEmbed(page)],
         components: [guideNavRow(page)],
-        ephemeral: true,
+        ...EPHEMERAL_REPLY,
     };
 }
 
