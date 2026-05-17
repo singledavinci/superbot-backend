@@ -28,6 +28,10 @@ export async function execute(interaction: ChatInputCommandInteraction) {
     const nameHint = interaction.options.getString('name');
     const guildId = interaction.guildId!;
 
+    console.log(
+        `[/track-collection] begin user=${interaction.user.id} guild=${guildId} contract=${contract}`,
+    );
+
     if (!ethers.isAddress(contract)) {
         return interaction.editReply('Invalid contract address. Use a valid `0x…` address.');
     }
@@ -38,7 +42,12 @@ export async function execute(interaction: ChatInputCommandInteraction) {
             return interaction.editReply('Server not set up yet. Run `/setup` first, then try again.');
         }
 
+        await interaction.editReply({ content: 'Resolving collection…', embeds: [], components: [] });
+
         const payload = await startCollectionSetupWizard(guildId, interaction.user.id, contract, nameHint);
+        console.log(
+            `[/track-collection] menu_ok user=${interaction.user.id} contract=${contract} name=${payload.embeds[0]?.data?.title ?? '?'}`,
+        );
         await interaction.editReply(payload);
     } catch (err: unknown) {
         console.error('[/track-collection] Error:', err);

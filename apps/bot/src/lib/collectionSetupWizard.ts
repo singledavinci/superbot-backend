@@ -229,15 +229,21 @@ export async function handleCollectionWizardInteraction(
 
     const guildId = interaction.guildId;
     const userId = interaction.user.id;
+    wizardLog('entry', {
+        customId: interaction.customId,
+        kind: interaction.isStringSelectMenu() ? 'select' : interaction.isButton() ? 'button' : 'modal',
+    });
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${PREFIX}:sel:`)) {
+        await interaction.deferUpdate();
         const field = interaction.customId.slice(`${PREFIX}:sel:`.length);
         const draft = await getCollectionDraft(guildId, userId);
         if (!draft) {
             wizardLog('select_expired', { field, guildId, userId });
-            await interaction.reply({
+            await interaction.editReply({
                 content: 'Setup expired — run `/track-collection` again.',
-                ...EPHEMERAL_REPLY,
+                embeds: [],
+                components: [],
             });
             return true;
         }
@@ -246,46 +252,51 @@ export async function handleCollectionWizardInteraction(
         else if (field === 'floor_rise') draft.floorRisePct = parsePctChoice(val);
         await setCollectionDraft(guildId, userId, draft);
         wizardLog('select', { field, val, floorDrop: draft.floorDropPct, floorRise: draft.floorRisePct });
-        await interaction.update(buildCollectionSetupPayload(draft, draft.imageUrl));
+        await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
         return true;
     }
 
     if (interaction.isButton()) {
         if (interaction.customId === `${PREFIX}:btn:toggle_hot`) {
+            await interaction.deferUpdate();
             const draft = await getCollectionDraft(guildId, userId);
             if (!draft) {
-                await interaction.reply({
+                await interaction.editReply({
                     content: 'Setup expired — run `/track-collection` again.',
-                    ...EPHEMERAL_REPLY,
+                    embeds: [],
+                    components: [],
                 });
                 return true;
             }
             draft.hotMintEnabled = !draft.hotMintEnabled;
             await setCollectionDraft(guildId, userId, draft);
             wizardLog('toggle_hot', { enabled: draft.hotMintEnabled });
-            await interaction.update(buildCollectionSetupPayload(draft, draft.imageUrl));
+            await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
             return true;
         }
 
         if (interaction.customId === `${PREFIX}:btn:toggle_delist`) {
+            await interaction.deferUpdate();
             const draft = await getCollectionDraft(guildId, userId);
             if (!draft) {
-                await interaction.reply({
+                await interaction.editReply({
                     content: 'Setup expired — run `/track-collection` again.',
-                    ...EPHEMERAL_REPLY,
+                    embeds: [],
+                    components: [],
                 });
                 return true;
             }
             draft.delistEnabled = !draft.delistEnabled;
             await setCollectionDraft(guildId, userId, draft);
             wizardLog('toggle_delist', { enabled: draft.delistEnabled });
-            await interaction.update(buildCollectionSetupPayload(draft, draft.imageUrl));
+            await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
             return true;
         }
 
         if (interaction.customId === `${PREFIX}:btn:cancel`) {
+            await interaction.deferUpdate();
             await clearCollectionDraft(guildId, userId);
-            await interaction.update({
+            await interaction.editReply({
                 content: 'Cancelled — collection was not tracked.',
                 embeds: [],
                 components: [],
@@ -334,9 +345,10 @@ export async function handleCollectionWizardInteraction(
             const draft = await getCollectionDraft(guildId, userId);
             if (!draft) {
                 wizardLog('save_expired', { guildId, userId });
-                await interaction.followUp({
+                await interaction.editReply({
                     content: 'Setup expired — run `/track-collection` again.',
-                    ...EPHEMERAL_REPLY,
+                    embeds: [],
+                    components: [],
                 });
                 return true;
             }
