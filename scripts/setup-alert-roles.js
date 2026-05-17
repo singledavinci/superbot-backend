@@ -142,16 +142,24 @@ function buildPickerComponents(rolePlan, roleIdByName) {
 }
 
 function buildPickerPayload(rolePlan, roleIdByName) {
+    const categoryGuide = rolePlan
+        .map((r) => `${r.emoji} **${r.name}** — ${r.alertTypes.join(', ').replace(/_/g, ' ').toLowerCase()}`)
+        .join('\n');
+
     return {
         embeds: [
             {
-                title: 'SuperBot alert pings',
+                title: '🔔 SuperBot alert subscriptions',
                 description:
-                    'Use the buttons below to **subscribe** or **unsubscribe** to each alert category. ' +
-                    'Each button **toggles** that ping role on your account — click again any time to change your mind.\n\n' +
-                    'When a category fires, you will be pinged in the corresponding alert channel only if you have opted in.',
+                    'Pick the signals you care about. Each button **toggles** a ping role on your account — press again anytime to unsubscribe.\n\n' +
+                    '**How it works**\n' +
+                    '• Alerts post in dedicated channels under **SuperBot Alerts**\n' +
+                    '• You are pinged **only** for categories you enable below\n' +
+                    '• Admins can audit routing anytime with `/alert-routes`\n\n' +
+                    '**Categories**\n' +
+                    categoryGuide,
                 color: 0x5865f2,
-                footer: { text: `SuperBot • ${PICKER_SENTINEL}` },
+                footer: { text: `SuperBot · Not financial advice · ${PICKER_SENTINEL}` },
             },
         ],
         components: buildPickerComponents(rolePlan, roleIdByName),

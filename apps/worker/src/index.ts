@@ -52,7 +52,8 @@ import {
     type WhaleContextMetrics,
 } from '@superbot/intelligence';
 import type { JsonRpcProvider } from 'ethers';
-import type { IntelligenceReport } from '@superbot/types';
+import type { AlertChannelRow, IntelligenceReport } from '@superbot/types';
+import { resolveAlertRoute } from '@superbot/types';
 
 const ZERO_ADDR = '0x0000000000000000000000000000000000000000';
 
@@ -110,35 +111,20 @@ function shortEthAddr(addr: string): string {
     return `${addr.slice(0, 6)}…${addr.slice(-4)}`;
 }
 
-type AlertChannelRouting = {
-    alertType: string;
-    discordChannelId: string;
-    mentionRoleId: string | null;
-};
-
-/** First matching alert-type row wins; used so dashboard can add dedicated routes per type. */
-function discordChannelForTypes(
-    channels: AlertChannelRouting[],
-    preferenceOrder: string[],
-): string | null {
-    for (const t of preferenceOrder) {
-        const row = channels.find(c => c.alertType === t);
-        if (row?.discordChannelId) return row.discordChannelId;
-    }
-    return null;
-}
-
-/** Guild route ping role: first preference order hit with a non-empty mentionRoleId wins. */
-function mentionRoleForTypes(
-    channels: { alertType: string; mentionRoleId: string | null }[],
-    preferenceOrder: string[],
-): string | null {
-    for (const t of preferenceOrder) {
-        const row = channels.find(c => c.alertType === t);
-        const id = row?.mentionRoleId;
-        if (typeof id === 'string' && id.trim()) return id.trim();
-    }
-    return null;
+function routeFor(
+    channels: AlertChannelRow[],
+    alertType: string,
+    opts?: {
+        channelOverride?: string | null;
+        mentionRoleOverride?: string | null;
+        debug?: boolean;
+        hypothesisId?: string;
+    },
+) {
+    return resolveAlertRoute(channels, alertType, {
+        ...opts,
+        debug: opts?.debug ?? process.env.DEBUG_ALERT_ROUTING === 'true',
+    });
 }
 
 export class EventWorker {
@@ -320,7 +306,27 @@ export class EventWorker {
         const first = items[0].discordPayload;
         const merged = this.mergeWhaleBatchMetrics(items);
         const cxWhale = explainWhale(merged);
-        const channelId = typeof first.channelId === 'string' ? first.channelId : '';
+        let channelId = typeof first.channelId === 'string' ? first.channelId : '';
+        let batchMentionRoleId =
+            typeof first.mentionRoleId === 'string' ? first.mentionRoleId : null;
+
+        const batchParts = batchBase.split(':');
+        const guildDbIdFromBatch = batchParts.length >= 5 ? batchParts[4] : '';
+        if (guildDbIdFromBatch) {
+            const guildBatch = await prisma.guild.findUnique({
+                where: { id: guildDbIdFromBatch },
+                include: { alertChannels: true },
+            });
+            if (guildBatch) {
+                const batchRoute = routeFor(
+                    guildBatch.alertChannels as AlertChannelRow[],
+                    'WALLET_ACTION_BATCH',
+                    { hypothesisId: 'B' },
+                );
+                if (batchRoute.channelId) channelId = batchRoute.channelId;
+                if (batchRoute.mentionRoleId) batchMentionRoleId = batchRoute.mentionRoleId;
+            }
+        }
         if (!channelId) return;
 
         const focalWalletLc = items[0].focalWalletLc;
@@ -410,7 +416,7 @@ export class EventWorker {
             walletProfile: first.walletProfile ?? null,
             nftMeta: first.nftMeta ?? null,
             intelligence,
-            mentionRoleId: typeof first.mentionRoleId === 'string' ? first.mentionRoleId : null,
+            mentionRoleId: batchMentionRoleId,
             batchBehavior: behaviorEmbed,
             batch: {
                 itemCount: items.length,
@@ -939,15 +945,12 @@ export class EventWorker {
                         );
                 }
 
-                const defaultWhaleChannelId = discordChannelForTypes(guild.alertChannels, [
-                    whaleAlertType,
-                    ...(whaleAlertType === 'WHALE_SALE'
-                        ? (['WHALE_BUY'] as const)
-                        : whaleAlertType === 'WHALE_MINT'
-                          ? (['WHALE_BUY'] as const)
-                          : (['WHALE_SALE'] as const)),
-                ]);
-                const channelId = wallet.alertChannelId ?? defaultWhaleChannelId;
+                const whaleRoute = routeFor(guild.alertChannels as AlertChannelRow[], whaleAlertType, {
+                    channelOverride: wallet.alertChannelId,
+                    mentionRoleOverride: wallet.mentionRoleId,
+                    hypothesisId: 'D',
+                });
+                const channelId = whaleRoute.channelId;
                 if (!channelId) {
                     console.warn(
                         `[Worker] No whale alert channel for wallet ${wallet.address} (guild ${guild.discordId}); skipping.`,
@@ -1021,11 +1024,7 @@ export class EventWorker {
                     { collectionName: whaleCollectionLabel },
                 );
 
-                const whaleRouteMention = mentionRoleForTypes(guild.alertChannels, [
-                    whaleAlertType,
-                    'WHALE_BUY',
-                    'WHALE_SALE',
-                ]);
+                const whaleRouteMention = whaleRoute.mentionRoleId;
                 if (whaleAlertType === 'WHALE_BUY' && !isSeller) {
                     await markOpportunityHotContract(redisConnection, chainLc, contractLcEff).catch(() => {});
                     await recordOpportunityTrackedBuy(
@@ -1054,7 +1053,7 @@ export class EventWorker {
                     currency,
                     marketplace,
                     intelligence,
-                    mentionRoleId: wallet.mentionRoleId ?? whaleRouteMention,
+                    mentionRoleId: whaleRouteMention,
                     possibleWashTrading: possibleWashTrading || undefined,
                     nftMeta,
                     walletProfile: focusProfile,
@@ -1160,8 +1159,11 @@ export class EventWorker {
         if (!guild) return;
 
         const row = guild.trackedCollections[0];
-        const defaultWhaleChannelId = discordChannelForTypes(guild.alertChannels, ['CLUSTER_BUY', 'WHALE_BUY']);
-        const channelId = row?.alertChannelId ?? defaultWhaleChannelId;
+        const clusterRoute = routeFor(guild.alertChannels as AlertChannelRow[], 'CLUSTER_BUY', {
+            mentionRoleOverride: row?.mentionRoleId,
+            hypothesisId: 'D',
+        });
+        const channelId = clusterRoute.channelId;
         if (!channelId) {
             console.warn(
                 `[Worker] CLUSTER_BUY: no channel for guild ${guild.discordId} contract ${det.contract}; skip.`,
@@ -1219,9 +1221,7 @@ export class EventWorker {
                 triggerTxHash: det.triggerTxHash,
                 triggerBuyer: det.triggerBuyer,
                 triggerProfile,
-                mentionRoleId:
-                    row?.mentionRoleId ??
-                    mentionRoleForTypes(guild.alertChannels, ['CLUSTER_BUY', 'WHALE_BUY']),
+                mentionRoleId: clusterRoute.mentionRoleId,
                 contextualExplanation: cxCluster,
                 aiNarrative: clusterNar ?? undefined,
             },
@@ -1293,23 +1293,24 @@ export class EventWorker {
         for (const row of collections) {
             const minTotal = row.sweepThresholdNative ?? envMinTotal;
             if (sweep.totalNative < minTotal) continue;
-            if (!row.alertChannelId) continue;
+
+            const gSweep = guildByIdSweep.get(row.guildId);
+            const sweepRoute = routeFor((gSweep?.alertChannels ?? []) as AlertChannelRow[], 'SWEEP', {
+                mentionRoleOverride: row.mentionRoleId,
+                hypothesisId: 'C',
+            });
+            if (!sweepRoute.channelId) continue;
 
             const sweepNar = await summarizeFactsWithOptionalAi({
                 explanation: cxSweep,
                 jobCacheKey: `sweep-${row.id}-${sweep.eventId}`,
             });
 
-            const gSweep = guildByIdSweep.get(row.guildId);
-            const sweepRouteMention = mentionRoleForTypes(gSweep?.alertChannels ?? [], [
-                'SWEEP',
-                'WHALE_BUY',
-            ]);
             await discordDeliveryQueue.add(
                 'discord_alert',
                 {
                     eventId: sweep.eventId,
-                    channelId: row.alertChannelId,
+                    channelId: sweepRoute.channelId,
                     alertType: 'SWEEP',
                     contract: sweep.contract,
                     chain: sweep.chain,
@@ -1324,7 +1325,7 @@ export class EventWorker {
                     tokenIds: sweep.tokenIds,
                     sampleNftMetas: sampleMetas.filter((m): m is NFTMetadata => m !== null),
                     sampleNftNames,
-                    mentionRoleId: row.mentionRoleId ?? sweepRouteMention,
+                    mentionRoleId: sweepRoute.mentionRoleId,
                     contextualExplanation: cxSweep,
                     aiNarrative: sweepNar ?? undefined,
                 },
@@ -1452,12 +1453,12 @@ export class EventWorker {
         for (const row of collections) {
             if (!row.hotMintEnabled) continue;
             const guild = guildById.get(row.guildId);
-            const defaultWhaleChannel = discordChannelForTypes(guild?.alertChannels ?? [], [
-                'HOT_MINT',
-                'WHALE_BUY',
-                'MINT_RADAR',
-            ]);
-            const channelId = row.hotMintChannelId ?? row.alertChannelId ?? defaultWhaleChannel;
+            const hotRoute = routeFor((guild?.alertChannels ?? []) as AlertChannelRow[], 'HOT_MINT', {
+                channelOverride: row.hotMintChannelId,
+                mentionRoleOverride: row.mentionRoleId,
+                hypothesisId: 'A',
+            });
+            const channelId = hotRoute.channelId;
             if (!channelId) {
                 console.warn(`[Worker] HOT_MINT: no channel row=${row.id} contract=${det.contract}`);
                 continue;
@@ -1490,13 +1491,7 @@ export class EventWorker {
                     floorEth,
                     blockRange,
                     topMinerLines,
-                    mentionRoleId:
-                        row.mentionRoleId ??
-                        mentionRoleForTypes(guild?.alertChannels ?? [], [
-                            'HOT_MINT',
-                            'MINT_RADAR',
-                            'WHALE_BUY',
-                        ]),
+                    mentionRoleId: hotRoute.mentionRoleId,
                     contextualExplanation: cxHot,
                     aiNarrative: hotNar ?? undefined,
                 },

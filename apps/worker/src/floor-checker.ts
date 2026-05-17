@@ -9,6 +9,7 @@ import {
     type RpcPool,
 } from '@superbot/analytics';
 import { explainFloorMovement, summarizeFactsWithOptionalAi } from '@superbot/intelligence';
+import { resolveAlertRoute, type AlertChannelRow } from '@superbot/types';
 import * as dotenv from 'dotenv';
 
 dotenv.config();
@@ -23,17 +24,6 @@ interface FloorRedisPayload {
 interface SnapshotPayload {
     priceNative: number;
     ts: number;
-}
-
-function floorRouteMention(
-    channels: { alertType: string; mentionRoleId: string | null }[],
-): string | null {
-    for (const t of ['FLOOR_DROP', 'FLOOR_RISE']) {
-        const row = channels.find(c => c.alertType === t);
-        const id = row?.mentionRoleId;
-        if (typeof id === 'string' && id.trim()) return id.trim();
-    }
-    return null;
 }
 
 export class FloorWorker {
@@ -124,11 +114,18 @@ export class FloorWorker {
                     const dropPct = ((prev.priceNative - current.priceNative) / prev.priceNative) * 100;
                     const risePct = ((current.priceNative - prev.priceNative) / prev.priceNative) * 100;
 
-                    if (
-                        item.floorAlertPct != null &&
-                        dropPct >= item.floorAlertPct &&
-                        item.alertChannelId
-                    ) {
+                    const gFloor = guildByIdFloor.get(item.guildId);
+                    const dropRoute = resolveAlertRoute(
+                        (gFloor?.alertChannels ?? []) as AlertChannelRow[],
+                        'FLOOR_DROP',
+                        {
+                            mentionRoleOverride: item.mentionRoleId,
+                            hypothesisId: 'B',
+                            debug: process.env.DEBUG_ALERT_ROUTING === 'true',
+                        },
+                    );
+
+                    if (item.floorAlertPct != null && dropPct >= item.floorAlertPct && dropRoute.channelId) {
                         const eventId = `floor-drop:${contract}:${hourBucket}`;
                         const cxDrop = explainFloorMovement({
                             direction: 'drop',
@@ -145,14 +142,11 @@ export class FloorWorker {
                         const { name: floorDropCollName } = await this.collectionNames.resolve(contract, {
                             trackedName: item.name,
                         });
-                        const gFloor = guildByIdFloor.get(item.guildId);
-                        const dropPing =
-                            item.mentionRoleId ?? floorRouteMention(gFloor?.alertChannels ?? []);
                         await discordDeliveryQueue.add(
                             'discord_alert',
                             {
                                 eventId,
-                                channelId: item.alertChannelId,
+                                channelId: dropRoute.channelId,
                                 alertType: 'FLOOR_DROP',
                                 contract,
                                 collectionName: floorDropCollName,
@@ -160,7 +154,7 @@ export class FloorWorker {
                                 prevFloor: prev.priceNative,
                                 pctChange: dropPct,
                                 currency: current.currency,
-                                mentionRoleId: dropPing,
+                                mentionRoleId: dropRoute.mentionRoleId,
                                 contextualExplanation: cxDrop,
                                 aiNarrative: narrDrop ?? undefined,
                             },
@@ -172,11 +166,17 @@ export class FloorWorker {
                         );
                     }
 
-                    if (
-                        item.floorRiseAlertPct != null &&
-                        risePct >= item.floorRiseAlertPct &&
-                        item.alertChannelId
-                    ) {
+                    const riseRoute = resolveAlertRoute(
+                        (gFloor?.alertChannels ?? []) as AlertChannelRow[],
+                        'FLOOR_RISE',
+                        {
+                            mentionRoleOverride: item.mentionRoleId,
+                            hypothesisId: 'B',
+                            debug: process.env.DEBUG_ALERT_ROUTING === 'true',
+                        },
+                    );
+
+                    if (item.floorRiseAlertPct != null && risePct >= item.floorRiseAlertPct && riseRoute.channelId) {
                         const eventId = `floor-rise:${contract}:${hourBucket}`;
                         const cxRise = explainFloorMovement({
                             direction: 'rise',
@@ -193,14 +193,11 @@ export class FloorWorker {
                         const { name: floorRiseCollName } = await this.collectionNames.resolve(contract, {
                             trackedName: item.name,
                         });
-                        const gRise = guildByIdFloor.get(item.guildId);
-                        const risePing =
-                            item.mentionRoleId ?? floorRouteMention(gRise?.alertChannels ?? []);
                         await discordDeliveryQueue.add(
                             'discord_alert',
                             {
                                 eventId,
-                                channelId: item.alertChannelId,
+                                channelId: riseRoute.channelId,
                                 alertType: 'FLOOR_RISE',
                                 contract,
                                 collectionName: floorRiseCollName,
@@ -208,7 +205,7 @@ export class FloorWorker {
                                 prevFloor: prev.priceNative,
                                 pctChange: risePct,
                                 currency: current.currency,
-                                mentionRoleId: risePing,
+                                mentionRoleId: riseRoute.mentionRoleId,
                                 contextualExplanation: cxRise,
                                 aiNarrative: narrRise ?? undefined,
                             },

@@ -274,6 +274,24 @@ export class SuperBot {
                 );
             }
 
+            // #region agent log
+            if (process.env.DEBUG_ALERT_ROUTING === 'true') {
+                fetch('http://127.0.0.1:7317/ingest/2a91f8bc-a1ce-4ea6-8234-d779e4605c12', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '482b27' },
+                    body: JSON.stringify({
+                        sessionId: '482b27',
+                        location: 'bot/index.ts:dispatchAlert',
+                        message: 'discord delivery',
+                        hypothesisId: 'E',
+                        data: { alertType, channelId, mentionRoleId: validatedRoleId ?? null },
+                        timestamp: Date.now(),
+                        runId: 'pre-fix',
+                    }),
+                }).catch(() => {});
+            }
+            // #endregion
+
             let content = '';
             if (validatedRoleId) {
                 content = `<@&${validatedRoleId}>`;

@@ -69,3 +69,12 @@ export interface WhaleAlertData {
     channelId: string;
     report?: IntelligenceReport;
 }
+
+export {
+    ALERT_ROUTE_PREFERENCE,
+    resolveAlertRoute,
+    resolveDiscordChannel,
+    resolveMentionRole,
+    type AlertChannelRow,
+    type AlertRouteResolution,
+} from './alertRouting';

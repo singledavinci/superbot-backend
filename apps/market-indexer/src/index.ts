@@ -19,6 +19,7 @@ import {
     explainMassDelist,
     summarizeFactsWithOptionalAi,
 } from '@superbot/intelligence';
+import { resolveAlertRoute, type AlertChannelRow } from '@superbot/types';
 
 dotenv.config();
 
@@ -457,10 +458,25 @@ export class MarketIndexer {
                 ? null
                 : await this.nftMetadata.fetchCollection(det.contract).catch(() => null);
 
+        const guildIdsListing = [...new Set(rows.map(r => r.guildId))];
+        const guildsListing = await prisma.guild.findMany({
+            where: { id: { in: guildIdsListing } },
+            include: { alertChannels: true },
+        });
+        const guildByIdListing = new Map(guildsListing.map(g => [g.id, g]));
+
         for (const row of rows) {
             const minListings = row.massListingThreshold ?? defaultMin;
             if (det.count < minListings) continue;
-            if (!row.alertChannelId) continue;
+
+            const gListing = guildByIdListing.get(row.guildId);
+            const listingRoute = resolveAlertRoute(
+                (gListing?.alertChannels ?? []) as AlertChannelRow[],
+                'MASS_LISTING',
+                { hypothesisId: 'A', debug: process.env.DEBUG_ALERT_ROUTING === 'true' },
+            );
+            const channelId = listingRoute.channelId;
+            if (!channelId) continue;
 
             const eventId = `${det.contract}:${det.bucketStart}:${row.id}`;
 
@@ -480,26 +496,16 @@ export class MarketIndexer {
                 { trackedName: row.name },
             );
 
-            const impactRoute = await prisma.alertChannel.findUnique({
-                where: {
-                    guildId_alertType: { guildId: row.guildId, alertType: 'FLOOR_IMPACT_FOLLOWUP' },
-                },
-                select: { mentionRoleId: true },
-            });
-            const listingRoute = await prisma.alertChannel.findUnique({
-                where: {
-                    guildId_alertType: { guildId: row.guildId, alertType: 'MASS_LISTING' },
-                },
-                select: { mentionRoleId: true },
-            });
-            const listingPing =
-                row.mentionRoleId ?? listingRoute?.mentionRoleId ?? null;
+            const impactRoute = resolveAlertRoute(
+                (gListing?.alertChannels ?? []) as AlertChannelRow[],
+                'FLOOR_IMPACT_FOLLOWUP',
+            );
 
             await discordQueue.add(
                 'discord_alert',
                 {
                     eventId,
-                    channelId: row.alertChannelId,
+                    channelId,
                     alertType: 'MASS_LISTING',
                     contract: det.contract,
                     chain: det.chain,
@@ -507,7 +513,7 @@ export class MarketIndexer {
                     collectionMeta,
                     listingCount: det.count,
                     windowMs: det.windowMs,
-                    mentionRoleId: listingPing,
+                    mentionRoleId: listingRoute.mentionRoleId,
                     floorBeforeEth: floorBefore,
                     floorImpactPending: true,
                     contextualExplanation: cxMass,
@@ -522,12 +528,12 @@ export class MarketIndexer {
 
             await this.scheduleFloorImpact({
                 eventId,
-                channelId: row.alertChannelId,
+                channelId,
                 alertType: 'MASS_LISTING',
                 contract: det.contract,
                 chain: det.chain,
                 floorBefore,
-                mentionRoleId: impactRoute?.mentionRoleId ?? null,
+                mentionRoleId: impactRoute.mentionRoleId,
             });
         }
     }
@@ -555,11 +561,28 @@ export class MarketIndexer {
                 ? null
                 : await this.nftMetadata.fetchCollection(det.contract).catch(() => null);
 
+        const guildIdsDelist = [...new Set(rows.map(r => r.guildId))];
+        const guildsDelist = await prisma.guild.findMany({
+            where: { id: { in: guildIdsDelist } },
+            include: { alertChannels: true },
+        });
+        const guildByIdDelist = new Map(guildsDelist.map(g => [g.id, g]));
+
         for (const row of rows) {
             if (row.delistAlertEnabled === false) continue;
             if (det.count < this.massDelistMinDefault) continue;
 
-            const channelId = row.delistChannelId ?? row.alertChannelId;
+            const gDelist = guildByIdDelist.get(row.guildId);
+            const delistRoute = resolveAlertRoute(
+                (gDelist?.alertChannels ?? []) as AlertChannelRow[],
+                'MASS_DELIST',
+                {
+                    channelOverride: row.delistChannelId,
+                    hypothesisId: 'A',
+                    debug: process.env.DEBUG_ALERT_ROUTING === 'true',
+                },
+            );
+            const channelId = delistRoute.channelId;
             if (!channelId) continue;
 
             const eventId = `delist:${det.contract}:${det.bucketStart}:${row.id}`;
@@ -580,19 +603,10 @@ export class MarketIndexer {
                 { trackedName: row.name },
             );
 
-            const impactRouteDel = await prisma.alertChannel.findUnique({
-                where: {
-                    guildId_alertType: { guildId: row.guildId, alertType: 'FLOOR_IMPACT_FOLLOWUP' },
-                },
-                select: { mentionRoleId: true },
-            });
-            const delistRoute = await prisma.alertChannel.findUnique({
-                where: {
-                    guildId_alertType: { guildId: row.guildId, alertType: 'MASS_DELIST' },
-                },
-                select: { mentionRoleId: true },
-            });
-            const delistPing = row.mentionRoleId ?? delistRoute?.mentionRoleId ?? null;
+            const impactRouteDel = resolveAlertRoute(
+                (gDelist?.alertChannels ?? []) as AlertChannelRow[],
+                'FLOOR_IMPACT_FOLLOWUP',
+            );
 
             await discordQueue.add(
                 'discord_alert',
@@ -607,7 +621,7 @@ export class MarketIndexer {
                     delistCount: det.count,
                     windowMs: det.windowMs,
                     sampleOrderIds: det.sampleOrderIds,
-                    mentionRoleId: delistPing,
+                    mentionRoleId: delistRoute.mentionRoleId,
                     floorBeforeEth: floorBefore,
                     floorImpactPending: true,
                     contextualExplanation: cxDel,
@@ -627,7 +641,7 @@ export class MarketIndexer {
                 contract: det.contract,
                 chain: det.chain,
                 floorBefore,
-                mentionRoleId: impactRouteDel?.mentionRoleId ?? null,
+                mentionRoleId: impactRouteDel.mentionRoleId,
             });
         }
     }

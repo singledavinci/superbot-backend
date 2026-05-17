@@ -7,10 +7,14 @@ import {
     type WalletProfile,
 } from '@superbot/analytics';
 import { links } from './links';
+import {
+    EMBED_COLORS,
+    STANDARD_MARKET_DISCLAIMER,
+    alertCategoryLine,
+    superbotFooter,
+} from './lib/embedTheme';
 
-/** Must appear on informational market/embed outputs. */
-export const STANDARD_MARKET_DISCLAIMER =
-    'Not financial advice. Signals are informational and may be incomplete or delayed.';
+export { STANDARD_MARKET_DISCLAIMER };
 
 function capitalizeConfidence(c: ContextualExplanation['confidence']): string {
     return c.slice(0, 1).toUpperCase() + c.slice(1);
@@ -265,11 +269,7 @@ export function createWalletActionBatchEmbed(data: {
     linkParts.push(markdownCollectionToolkit(data.contract, data.nftMeta?.collectionSlug ?? null));
     if (linkParts.length) embed.addFields({ name: 'Links', value: linkParts.join(' · '), inline: false });
 
-    return embed
-        .setTimestamp()
-        .setFooter({
-            text: 'SuperBot Intelligence • Not financial advice. Signals are informational and may be incomplete or delayed.',
-        });
+    return embed.setTimestamp().setFooter({ text: superbotFooter('Wallet batches') });
 }
 
 export function createWhaleBuyEmbed(data: {
@@ -422,9 +422,7 @@ export function createWhaleBuyEmbed(data: {
     });
     if (linkLine) embed.addFields({ name: 'Links', value: linkLine, inline: false });
 
-    embed.setTimestamp().setFooter({
-        text: `SuperBot Intelligence • ${STANDARD_MARKET_DISCLAIMER}`,
-    });
+    embed.setTimestamp().setFooter({ text: superbotFooter('Whale trades') });
 
     return embed;
 }
@@ -451,10 +449,11 @@ export function createClusterBuyEmbed(data: {
 
     const headline = data.nftName?.trim() ? data.nftName.trim() : collectionLabel;
     const embed = new EmbedBuilder()
-        .setColor('#eab308')
-        .setTitle(`🧲 Smart-money cluster — ${headline}`)
+        .setColor(EMBED_COLORS.cluster)
+        .setTitle(`🧲 Cluster buy — ${headline}`)
         .setDescription(
-            `**${data.wallets.length}** distinct watched wallets bought this collection within **~${data.windowMinutes} min**.`,
+            alertCategoryLine('Smart-money cluster', `${data.wallets.length} wallets · ~${data.windowMinutes} min`) +
+                `\n\nMultiple tracked wallets bought **${collectionLabel}** in a short window.`,
         );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
@@ -516,7 +515,7 @@ export function createClusterBuyEmbed(data: {
         inline: false,
     });
 
-    return embed.setTimestamp().setFooter({ text: `SuperBot Smart-Money • ${STANDARD_MARKET_DISCLAIMER}` });
+    return embed.setTimestamp().setFooter({ text: superbotFooter('Cluster buys') });
 }
 
 export function createMintAlertEmbed(data: {
@@ -531,9 +530,9 @@ export function createMintAlertEmbed(data: {
         ? data.collectionName.trim()
         : formatFallbackCollectionName(data.contract);
     const embed = new EmbedBuilder()
-        .setColor('#ffcc00')
-        .setTitle(`🚀 High-Velocity Mint — ${label}`)
-        .setDescription(`**Signal:** \`Mint Radar Alert\``)
+        .setColor(EMBED_COLORS.mint)
+        .setTitle(`📈 Mint radar — ${label}`)
+        .setDescription(alertCategoryLine('High-velocity mint', `${data.velocity} mints / ${data.timeWindowMin} min`))
         .addFields(
             { name: 'Collection', value: label, inline: true },
             { name: 'Chain', value: data.chain, inline: true },
@@ -567,9 +566,7 @@ export function createMintAlertEmbed(data: {
         inline: false,
     });
 
-    embed.setTimestamp().setFooter({
-        text: `SuperBot Mint Radar • ${STANDARD_MARKET_DISCLAIMER}`,
-    });
+    embed.setTimestamp().setFooter({ text: superbotFooter('Mint radar') });
 
     return embed;
 }
@@ -600,9 +597,11 @@ export function createSweepEmbed(data: {
             : '—';
 
     const embed = new EmbedBuilder()
-        .setColor('#f97316')
-        .setTitle(`🧹 Floor sweep — ${collectionLabel}`)
-        .setDescription(`Multiple items bought in one transaction (possible floor sweep).`);
+        .setColor(EMBED_COLORS.sweep)
+        .setTitle(`💰 Floor sweep — ${collectionLabel}`)
+        .setDescription(
+            alertCategoryLine('Sweep', `${data.itemCount} items · ${data.totalNative.toFixed(4)} ${data.currency}`),
+        );
 
     const thumb =
         normalizeImageUrl(data.sampleNftMetas?.[0]?.thumbnailUrl ?? data.sampleNftMetas?.[0]?.imageUrl) ||
@@ -667,7 +666,7 @@ export function createSweepEmbed(data: {
         inline: false,
     });
 
-    return embed.setTimestamp().setFooter({ text: `SuperBot Market Intelligence • ${STANDARD_MARKET_DISCLAIMER}` });
+    return embed.setTimestamp().setFooter({ text: superbotFooter('Sweeps') });
 }
 
 export function createMassListingEmbed(data: {
@@ -692,10 +691,10 @@ export function createMassListingEmbed(data: {
             : null;
 
     const embed = new EmbedBuilder()
-        .setColor('#38bdf8')
-        .setTitle(`📣 Listing surge — ${data.collectionName}`)
+        .setColor(EMBED_COLORS.listing)
+        .setTitle(`📊 Listing surge — ${data.collectionName}`)
         .setDescription(
-            `**${data.collectionName}** — Many new listings appeared in a short window.`,
+            alertCategoryLine('Listing surge', `${data.listingCount} new listings / ~${mins} min`),
         );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
@@ -718,10 +717,9 @@ export function createMassListingEmbed(data: {
 
     embed.addFields({ name: 'Links', value: markdownCollectionToolkit(data.contract, slug), inline: false });
 
-    const base = `SuperBot Market Intelligence • ${STANDARD_MARKET_DISCLAIMER}`;
     const footerText = data.floorImpactPending
-        ? `${base} • Checking floor impact in ~10 minutes.`
-        : base;
+        ? `${superbotFooter('Listing activity')} · Floor check in ~10 min`
+        : superbotFooter('Listing activity');
     return embed.setTimestamp().setFooter({ text: footerText });
 }
 
@@ -752,10 +750,11 @@ export function createMassDelistEmbed(data: {
             : null;
 
     const embed = new EmbedBuilder()
-        .setColor('#34d399')
-        .setTitle(`✨ Delist surge — ${data.collectionName}`)
+        .setColor(EMBED_COLORS.delist)
+        .setTitle(`📊 Delist surge — ${data.collectionName}`)
         .setDescription(
-            `**${data.collectionName}** — **Delist surge:** ${data.delistCount} NFTs pulled from marketplace listings in ~${mins} min — tighter supply.`,
+            alertCategoryLine('Delist surge', `${data.delistCount} delists / ~${mins} min`) +
+                '\n\nListings were pulled — supply on market is tightening.',
         );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
@@ -779,10 +778,9 @@ export function createMassDelistEmbed(data: {
 
     embed.addFields({ name: 'Links', value: markdownCollectionToolkit(data.contract, slug), inline: false });
 
-    const base = `SuperBot Market Intelligence • ${STANDARD_MARKET_DISCLAIMER}`;
     const footerText = data.floorImpactPending
-        ? `${base} • Checking floor impact in ~10 minutes.`
-        : base;
+        ? `${superbotFooter('Delist activity')} · Floor check in ~10 min`
+        : superbotFooter('Delist activity');
     return embed.setTimestamp().setFooter({ text: footerText });
 }
 
@@ -881,10 +879,13 @@ export function createHotMintEmbed(data: {
         : formatFallbackCollectionName(data.contract);
 
     const embed = new EmbedBuilder()
-        .setColor('#f97316')
-        .setTitle(`🔥 Hot Mint — ${coll}`)
+        .setColor(EMBED_COLORS.hotMint)
+        .setTitle(`🔥 Hot mint — ${coll}`)
         .setDescription(
-            `**${coll}** — **${data.uniqueMinters}** wallets minted **${data.totalMints}** tokens in **~${data.windowMinutes}** minutes.`,
+            alertCategoryLine(
+                'Hot mint',
+                `${data.uniqueMinters} wallets · ${data.totalMints} mints · ~${data.windowMinutes} min`,
+            ),
         );
 
     const thumb = normalizeImageUrl(data.collectionMeta?.imageUrl);
@@ -915,7 +916,7 @@ export function createHotMintEmbed(data: {
     }
 
     return embed.setTimestamp().setFooter({
-        text: `SuperBot Mint Intelligence • ${STANDARD_MARKET_DISCLAIMER} • Ethereum only`,
+        text: `${superbotFooter('Hot mints')} · Ethereum mainnet`,
     });
 }
 

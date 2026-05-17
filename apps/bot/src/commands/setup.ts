@@ -68,14 +68,17 @@ export async function execute(interaction: ChatInputCommandInteraction) {
         });
 
         const embed = new EmbedBuilder()
-            .setColor('#00f0ff')
-            .setTitle('✅ SuperBot Setup Complete')
-            .setDescription('Your server has been configured successfully.')
-            .addFields(
-                { name: '🐳 Whale Alerts', value: `<#${whaleChannel.id}>`, inline: true },
-                { name: '🚀 Mint Radar',   value: `<#${mintChannel.id}>`,  inline: true },
+            .setColor(0x5865f2)
+            .setTitle('✅ SuperBot connected')
+            .setDescription(
+                'Quick setup saved whale + mint radar channels. For the full **SuperBot Alerts** layout (sweeps, clusters, floor, listings, role picker), run the provisioning scripts on Railway or ask your operator.\n\n' +
+                    'Use `/alert-routes` to verify channel + ping role mapping after provisioning.',
             )
-            .setFooter({ text: 'Use /track-wallet and /track-collection to start monitoring.' })
+            .addFields(
+                { name: '🐋 Whale trades', value: `<#${whaleChannel.id}>`, inline: true },
+                { name: '📈 Mint radar', value: `<#${mintChannel.id}>`, inline: true },
+            )
+            .setFooter({ text: 'Next: /track-wallet · /track-collection · #alert-roles for pings' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
