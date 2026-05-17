@@ -78,7 +78,7 @@ export async function execute(interaction: ChatInputCommandInteraction) {
                 { name: '🐋 Whale trades', value: `<#${whaleChannel.id}>`, inline: true },
                 { name: '📈 Mint radar', value: `<#${mintChannel.id}>`, inline: true },
             )
-            .setFooter({ text: 'Next: /track-wallet · /track-collection · #alert-roles for pings' })
+            .setFooter({ text: 'Next: /guide · /track-collection · /track-wallet · #alert-roles' })
             .setTimestamp();
 
         await interaction.editReply({ embeds: [embed] });
