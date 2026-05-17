@@ -110,6 +110,13 @@ async function createGuildChannel(guildId, token, payload) {
     return discord('POST', `/guilds/${guildId}/channels`, token, payload);
 }
 
+function normalizeChannelKey(name) {
+    return String(name || '')
+        .toLowerCase()
+        .replace(/[・\-_\s]/g, '')
+        .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
 async function listChannelMessages(channelId, token, limit = 50) {
     return discord('GET', `/channels/${channelId}/messages?limit=${limit}`, token);
 }
@@ -194,7 +201,13 @@ async function main() {
     const cat = channels.find((c) => c.id === categoryId);
     console.log(`Category: "${cat?.name || CATEGORY_NAME}" (id=${categoryId})`);
 
-    let pickerChannel = channels.find((c) => c.type === 0 && c.name === PICKER_CHANNEL_NAME);
+    const pickerKey = normalizeChannelKey(PICKER_CHANNEL_NAME);
+    let pickerChannel = channels.find(
+        (c) =>
+            c.type === 0 &&
+            c.parent_id === categoryId &&
+            normalizeChannelKey(c.name) === pickerKey,
+    );
     if (pickerChannel) {
         console.log(`✓ #${PICKER_CHANNEL_NAME} already exists (id=${pickerChannel.id})`);
     } else {

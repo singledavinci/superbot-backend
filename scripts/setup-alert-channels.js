@@ -53,6 +53,14 @@ async function createChannel(guildId, token, payload) {
     return discord('POST', `/guilds/${guildId}/channels`, token, payload);
 }
 
+/** Treat #📈-mint-radar and #📈・mint-radar as the same logical channel. */
+function normalizeChannelKey(name) {
+    return String(name || '')
+        .toLowerCase()
+        .replace(/[・\-_\s]/g, '')
+        .replace(/[^\p{L}\p{N}]/gu, '');
+}
+
 async function ensureCategory(guildId, token, channels) {
     const existing = channels.find((c) => c.type === 4 && c.name === CATEGORY_NAME);
     if (existing) {
@@ -65,8 +73,12 @@ async function ensureCategory(guildId, token, channels) {
 }
 
 async function ensureTextChannel(guildId, token, categoryId, channels, name, topic) {
+    const key = normalizeChannelKey(name);
     const existing = channels.find(
-        (c) => c.type === 0 && c.name === name && c.parent_id === categoryId,
+        (c) =>
+            c.type === 0 &&
+            c.parent_id === categoryId &&
+            normalizeChannelKey(c.name) === key,
     );
     if (existing) {
         console.log(`  ✓ #${name} already exists (id=${existing.id})`);
