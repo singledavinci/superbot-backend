@@ -5,6 +5,7 @@ export type AlertChannelRow = {
     mentionRoleId?: string | null;
 };
 
+/** Preference order when resolving channel + ping role for each alert type. */
 export const ALERT_ROUTE_PREFERENCE: Record<string, readonly string[]> = {
     WHALE_BUY: ['WHALE_BUY', 'WHALE_SALE'],
     WHALE_SALE: ['WHALE_SALE', 'WHALE_BUY'],
@@ -33,36 +34,17 @@ function preferenceFor(alertType: string): readonly string[] {
     return ALERT_ROUTE_PREFERENCE[alertType] ?? [alertType];
 }
 
-function debugRouteLog(payload: {
-    hypothesisId: string;
-    alertType: string;
-    channelId: string | null;
-    mentionRoleId: string | null;
-    source: string;
-}) {
-    fetch('http://127.0.0.1:7317/ingest/2a91f8bc-a1ce-4ea6-8234-d779e4605c12', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '482b27' },
-        body: JSON.stringify({
-            sessionId: '482b27',
-            location: 'alertRouting.ts:resolveAlertRoute',
-            message: 'alert route resolved',
-            hypothesisId: payload.hypothesisId,
-            data: payload,
-            timestamp: Date.now(),
-            runId: 'pre-fix',
-        }),
-    }).catch(() => {});
-}
-
+/**
+ * Resolve Discord channel + ping role for an alert.
+ * Per-collection alertChannelId must NOT be used for specialized alerts — only explicit
+ * overrides (e.g. hotMintChannelId, delistChannelId, wallet.alertChannelId) or guild routes.
+ */
 export function resolveAlertRoute(
     channels: AlertChannelRow[],
     alertType: string,
     opts?: {
         channelOverride?: string | null;
         mentionRoleOverride?: string | null;
-        debug?: boolean;
-        hypothesisId?: string;
     },
 ): AlertRouteResolution {
     const prefs = preferenceFor(alertType);
@@ -101,19 +83,10 @@ export function resolveAlertRoute(
         }
     }
 
-    if (opts?.debug) {
-        debugRouteLog({
-            hypothesisId: opts.hypothesisId ?? 'route',
-            alertType,
-            channelId,
-            mentionRoleId,
-            source: channelSource,
-        });
-    }
-
     return { alertType, channelId, mentionRoleId, source: channelSource };
 }
 
+/** @deprecated Use resolveAlertRoute */
 export function resolveDiscordChannel(
     channels: AlertChannelRow[],
     alertType: string,
@@ -122,6 +95,7 @@ export function resolveDiscordChannel(
     return resolveAlertRoute(channels, alertType, { channelOverride }).channelId;
 }
 
+/** @deprecated Use resolveAlertRoute */
 export function resolveMentionRole(
     channels: AlertChannelRow[],
     alertType: string,

@@ -120,8 +120,6 @@ export class FloorWorker {
                         'FLOOR_DROP',
                         {
                             mentionRoleOverride: item.mentionRoleId,
-                            hypothesisId: 'B',
-                            debug: process.env.DEBUG_ALERT_ROUTING === 'true',
                         },
                     );
 
@@ -171,8 +169,6 @@ export class FloorWorker {
                         'FLOOR_RISE',
                         {
                             mentionRoleOverride: item.mentionRoleId,
-                            hypothesisId: 'B',
-                            debug: process.env.DEBUG_ALERT_ROUTING === 'true',
                         },
                     );
 

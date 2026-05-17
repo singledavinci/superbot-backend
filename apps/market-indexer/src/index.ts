@@ -473,7 +473,6 @@ export class MarketIndexer {
             const listingRoute = resolveAlertRoute(
                 (gListing?.alertChannels ?? []) as AlertChannelRow[],
                 'MASS_LISTING',
-                { hypothesisId: 'A', debug: process.env.DEBUG_ALERT_ROUTING === 'true' },
             );
             const channelId = listingRoute.channelId;
             if (!channelId) continue;
@@ -578,8 +577,6 @@ export class MarketIndexer {
                 'MASS_DELIST',
                 {
                     channelOverride: row.delistChannelId,
-                    hypothesisId: 'A',
-                    debug: process.env.DEBUG_ALERT_ROUTING === 'true',
                 },
             );
             const channelId = delistRoute.channelId;

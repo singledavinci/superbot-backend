@@ -117,14 +117,9 @@ function routeFor(
     opts?: {
         channelOverride?: string | null;
         mentionRoleOverride?: string | null;
-        debug?: boolean;
-        hypothesisId?: string;
     },
 ) {
-    return resolveAlertRoute(channels, alertType, {
-        ...opts,
-        debug: opts?.debug ?? process.env.DEBUG_ALERT_ROUTING === 'true',
-    });
+    return resolveAlertRoute(channels, alertType, opts);
 }
 
 export class EventWorker {
@@ -321,7 +316,6 @@ export class EventWorker {
                 const batchRoute = routeFor(
                     guildBatch.alertChannels as AlertChannelRow[],
                     'WALLET_ACTION_BATCH',
-                    { hypothesisId: 'B' },
                 );
                 if (batchRoute.channelId) channelId = batchRoute.channelId;
                 if (batchRoute.mentionRoleId) batchMentionRoleId = batchRoute.mentionRoleId;
@@ -948,7 +942,6 @@ export class EventWorker {
                 const whaleRoute = routeFor(guild.alertChannels as AlertChannelRow[], whaleAlertType, {
                     channelOverride: wallet.alertChannelId,
                     mentionRoleOverride: wallet.mentionRoleId,
-                    hypothesisId: 'D',
                 });
                 const channelId = whaleRoute.channelId;
                 if (!channelId) {
@@ -1161,7 +1154,6 @@ export class EventWorker {
         const row = guild.trackedCollections[0];
         const clusterRoute = routeFor(guild.alertChannels as AlertChannelRow[], 'CLUSTER_BUY', {
             mentionRoleOverride: row?.mentionRoleId,
-            hypothesisId: 'D',
         });
         const channelId = clusterRoute.channelId;
         if (!channelId) {
@@ -1297,7 +1289,6 @@ export class EventWorker {
             const gSweep = guildByIdSweep.get(row.guildId);
             const sweepRoute = routeFor((gSweep?.alertChannels ?? []) as AlertChannelRow[], 'SWEEP', {
                 mentionRoleOverride: row.mentionRoleId,
-                hypothesisId: 'C',
             });
             if (!sweepRoute.channelId) continue;
 
@@ -1456,7 +1447,6 @@ export class EventWorker {
             const hotRoute = routeFor((guild?.alertChannels ?? []) as AlertChannelRow[], 'HOT_MINT', {
                 channelOverride: row.hotMintChannelId,
                 mentionRoleOverride: row.mentionRoleId,
-                hypothesisId: 'A',
             });
             const channelId = hotRoute.channelId;
             if (!channelId) {
