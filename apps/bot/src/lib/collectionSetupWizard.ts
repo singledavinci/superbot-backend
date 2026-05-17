@@ -30,22 +30,6 @@ import {
 
 const PREFIX = 'collwiz';
 
-function wizardLog(step: string, data: Record<string, unknown>) {
-    const line = JSON.stringify({
-        sessionId: '482b27',
-        location: `collectionSetupWizard:${step}`,
-        message: step,
-        data,
-        timestamp: Date.now(),
-    });
-    console.log(`[Wizard] ${line}`);
-    fetch('http://127.0.0.1:7317/ingest/2a91f8bc-a1ce-4ea6-8234-d779e4605c12', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json', 'X-Debug-Session-Id': '482b27' },
-        body: line,
-    }).catch(() => {});
-}
-
 let resolver: CollectionNameResolver | null = null;
 function getResolver(): CollectionNameResolver {
     if (!resolver) {
@@ -178,7 +162,6 @@ export async function startCollectionSetupWizard(
         imageUrl: collectionMeta?.imageUrl ?? null,
     };
     await setCollectionDraft(guildDiscordId, userId, draft);
-    wizardLog('start', { contract: draft.contract, guildId: guildDiscordId, userId });
 
     return buildCollectionSetupPayload(draft, draft.imageUrl);
 }
@@ -229,17 +212,12 @@ export async function handleCollectionWizardInteraction(
 
     const guildId = interaction.guildId;
     const userId = interaction.user.id;
-    wizardLog('entry', {
-        customId: interaction.customId,
-        kind: interaction.isStringSelectMenu() ? 'select' : interaction.isButton() ? 'button' : 'modal',
-    });
 
     if (interaction.isStringSelectMenu() && interaction.customId.startsWith(`${PREFIX}:sel:`)) {
         await interaction.deferUpdate();
         const field = interaction.customId.slice(`${PREFIX}:sel:`.length);
         const draft = await getCollectionDraft(guildId, userId);
         if (!draft) {
-            wizardLog('select_expired', { field, guildId, userId });
             await interaction.editReply({
                 content: 'Setup expired — run `/track-collection` again.',
                 embeds: [],
@@ -251,7 +229,6 @@ export async function handleCollectionWizardInteraction(
         if (field === 'floor_drop') draft.floorDropPct = parsePctChoice(val);
         else if (field === 'floor_rise') draft.floorRisePct = parsePctChoice(val);
         await setCollectionDraft(guildId, userId, draft);
-        wizardLog('select', { field, val, floorDrop: draft.floorDropPct, floorRise: draft.floorRisePct });
         await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
         return true;
     }
@@ -270,7 +247,6 @@ export async function handleCollectionWizardInteraction(
             }
             draft.hotMintEnabled = !draft.hotMintEnabled;
             await setCollectionDraft(guildId, userId, draft);
-            wizardLog('toggle_hot', { enabled: draft.hotMintEnabled });
             await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
             return true;
         }
@@ -288,7 +264,6 @@ export async function handleCollectionWizardInteraction(
             }
             draft.delistEnabled = !draft.delistEnabled;
             await setCollectionDraft(guildId, userId, draft);
-            wizardLog('toggle_delist', { enabled: draft.delistEnabled });
             await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
             return true;
         }
@@ -344,7 +319,6 @@ export async function handleCollectionWizardInteraction(
             await interaction.deferUpdate();
             const draft = await getCollectionDraft(guildId, userId);
             if (!draft) {
-                wizardLog('save_expired', { guildId, userId });
                 await interaction.editReply({
                     content: 'Setup expired — run `/track-collection` again.',
                     embeds: [],
@@ -355,7 +329,6 @@ export async function handleCollectionWizardInteraction(
             try {
                 const { collectionName, channelId } = await persistTrackedCollection(guildId, draft);
                 await clearCollectionDraft(guildId, userId);
-                wizardLog('save_ok', { contract: draft.contract, collectionName });
                 const done = new EmbedBuilder()
                     .setColor(0x22c55e)
                     .setTitle('Collection tracked')
@@ -370,7 +343,6 @@ export async function handleCollectionWizardInteraction(
                 await interaction.editReply({ embeds: [done], components: [] });
             } catch (err: unknown) {
                 const msg = err instanceof Error ? err.message : 'Save failed';
-                wizardLog('save_error', { error: msg });
                 await interaction.editReply({ content: `Error: ${msg}`, embeds: [], components: [] });
             }
             return true;
@@ -391,14 +363,12 @@ export async function handleCollectionWizardInteraction(
         draft.floorDropPct = dropRaw ? Math.max(0, Number(dropRaw)) || null : null;
         draft.floorRisePct = riseRaw ? Math.max(0, Number(riseRaw)) || null : null;
         await setCollectionDraft(guildId, userId, draft);
-        wizardLog('modal_custom', { floorDrop: draft.floorDropPct, floorRise: draft.floorRisePct });
         await interaction.deferUpdate();
         await interaction.editReply(buildCollectionSetupPayload(draft, draft.imageUrl));
         return true;
     }
 
     if (interaction.customId.startsWith(PREFIX)) {
-        wizardLog('unknown_control', { customId: interaction.customId });
         if (!interaction.replied && !interaction.deferred) {
             await interaction.reply({
                 content: 'Unknown control — run `/track-collection` again for a fresh menu.',
