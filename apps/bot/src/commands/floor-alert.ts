@@ -9,7 +9,7 @@ import { STANDARD_MARKET_DISCLAIMER } from '../embeds';
 
 export const data = new SlashCommandBuilder()
     .setName('floor-alert')
-    .setDescription('Tune floor-move alerts for a tracked collection (wraps tracked-collection thresholds)')
+    .setDescription('Advanced floor % tuning — or use /track-collection for the setup menu')
     .addSubcommand(sc =>
         sc
             .setName('set-drop-threshold')

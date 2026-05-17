@@ -844,7 +844,16 @@ export class SuperBot {
                         await interaction.reply({ content: 'There was an error while executing this command!', ephemeral: true });
                     }
                 }
-            } else if (interaction.isButton()) {
+            } else if (interaction.isStringSelectMenu() || interaction.isButton() || interaction.isModalSubmit()) {
+                const { routeComponentInteraction } = await import('./lib/componentInteractions');
+                if (await routeComponentInteraction(interaction)) {
+                    return;
+                }
+
+                if (!interaction.isButton()) {
+                    return;
+                }
+
                 if (interaction.customId.startsWith('togglerole:')) {
                     const roleId = interaction.customId.slice('togglerole:'.length).trim();
                     if (!/^\d{17,22}$/.test(roleId)) {
