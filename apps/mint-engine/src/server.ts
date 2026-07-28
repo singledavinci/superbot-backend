@@ -1,6 +1,6 @@
 import express, { Router } from 'express';
 import { prisma, connectDB } from '@superbot/database';
-import { redisConnection } from '@superbot/queue';
+import { mintExecutionQueue, redisConnection } from '@superbot/queue';
 import { resolveHttpRpcUrl, parseCommaSeparatedRpcUrls } from '@superbot/analytics';
 import { mintEnv } from './config/mintEnv';
 import { buildMintEngineHealthPayload } from './http/mintEngineHealthPayload';
@@ -77,7 +77,12 @@ export async function startMintEngineHttp(): Promise<void> {
         }),
     );
     mintRouter.use(createHmacAuthMiddleware(redisConnection));
-    registerMintRoutes(mintRouter, { prisma, redis: redisConnection, rpcUrl });
+    registerMintRoutes(mintRouter, {
+        prisma,
+        redis: redisConnection,
+        rpcUrl,
+        mintExecutionQueue,
+    });
     app.use('/v1/mint', mintRouter);
 
     registerMetricsRoute(app);

@@ -1,7 +1,6 @@
 import type { Request, Response, Router } from 'express';
 import type IORedis from 'ioredis';
 import type { PrismaClient } from '@superbot/database';
-import { mintExecutionQueue } from '@superbot/queue';
 import { MintExecutionEngine } from '../engine/MintExecutionEngine';
 import { ClockSyncMonitor } from '../engine/ClockSyncMonitor';
 import { SignerAdapter } from '../engine/SignerAdapter';
@@ -16,9 +15,22 @@ let mintJobsTotal = 0;
 let mintJobsSucceeded = 0;
 let mintJobsFailed = 0;
 
+type MintExecutionQueue = {
+    add(
+        name: string,
+        data: { mintJobId: string },
+        options: { jobId: string },
+    ): Promise<unknown>;
+};
+
 export function registerMintRoutes(
     app: Router,
-    deps: { prisma: PrismaClient; redis: IORedis | null; rpcUrl: string | null },
+    deps: {
+        prisma: PrismaClient;
+        redis: IORedis | null;
+        rpcUrl: string | null;
+        mintExecutionQueue: MintExecutionQueue;
+    },
 ): void {
     const engine = new MintExecutionEngine(deps.prisma, deps.redis, deps.rpcUrl);
     const clock = new ClockSyncMonitor(deps.rpcUrl);
@@ -141,7 +153,7 @@ export function registerMintRoutes(
         }
         mintJobsTotal++;
         const jobIdSafe = `mintjob_${created.id}`.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 120);
-        await mintExecutionQueue
+        await deps.mintExecutionQueue
             .add('process_mint_job', { mintJobId: created.id }, { jobId: jobIdSafe })
             .catch((err: unknown) => console.warn('[mintRoutes] enqueue mint_execution failed:', err));
         res.json(created);

@@ -1,5 +1,5 @@
 import assert from 'node:assert/strict';
-import { after, describe, it } from 'node:test';
+import { describe, it } from 'node:test';
 import type { Router } from 'express';
 import { registerMintRoutes } from '../http/mintRoutes';
 import { mintEnv } from '../config/mintEnv';
@@ -35,7 +35,14 @@ function buildRouteHarness(prisma: import('@superbot/database').PrismaClient, ro
             handlers.set(path, handler);
         },
     } as unknown as Router;
-    registerMintRoutes(app, { prisma, redis: null, rpcUrl: null });
+    registerMintRoutes(app, {
+        prisma,
+        redis: null,
+        rpcUrl: null,
+        mintExecutionQueue: {
+            add: async () => undefined,
+        },
+    });
     const h = handlers.get(routePath);
     if (!h) throw new Error(`Missing ${routePath} route`);
     return h;
@@ -47,21 +54,6 @@ async function invoke(handler: CapturedHandler, body: Record<string, unknown>): 
         handler({ body }, res);
     });
 }
-
-after(async () => {
-    // `mintRoutes` imports queue singletons that keep Redis handles open in tests.
-    const q = await import('@superbot/queue');
-    await Promise.all([
-        q.eventQueue.close(),
-        q.discordQueue.close(),
-        q.walletActionBatchQueue.close(),
-        q.floorImpactQueue.close(),
-        q.mintExecutionQueue.close(),
-        q.mintTriggersQueue.close(),
-        q.mintNotificationsQueue.close(),
-    ]);
-    await q.redisConnection.quit();
-});
 
 describe('mintRoutes /jobs/confirm-mainnet', () => {
     it('returns 400 when jobId is missing', async () => {
