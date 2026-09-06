@@ -26,6 +26,8 @@ const PLAN = [
     { channel: '📊-listing-activity', types: ['MASS_LISTING', 'MASS_DELIST', 'FLOOR_IMPACT_FOLLOWUP'], topic: 'Mass listings & mass delistings on tracked collections (with floor-impact follow-ups).' },
     { channel: '📉-floor-alerts', types: ['FLOOR_DROP', 'FLOOR_RISE'], topic: 'Floor price drops & rises on tracked collections.' },
     { channel: '📡-opportunities', types: ['OPPORTUNITY_SPIKE'], topic: 'Momentum / opportunity spikes on tracked collections.' },
+    { channel: '🆕-new-collections', types: ['NEW_COLLECTION'], topic: 'Capped first-seen / first-mint cards from MintDash. Do not reuse #📈-mint-radar.' },
+    { channel: '🧪-radar-debug', types: ['RADAR_DEBUG'], topic: 'MintDash radar debug digest. Ops only. Observed on-chain. Not financial advice.' },
 ];
 
 async function discord(method, path, token, body) {
