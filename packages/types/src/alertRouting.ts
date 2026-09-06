@@ -21,85 +21,9 @@ export const ALERT_ROUTE_PREFERENCE: Record<string, readonly string[]> = {
     FLOOR_DROP: ['FLOOR_DROP', 'FLOOR_RISE'],
     FLOOR_RISE: ['FLOOR_RISE', 'FLOOR_DROP'],
     OPPORTUNITY_SPIKE: ['OPPORTUNITY_SPIKE'],
+    // MintDash radar cards — never fall back into tracked mint radar.
+    NEW_COLLECTION: ['NEW_COLLECTION'],
+    RADAR_DEBUG: ['RADAR_DEBUG'],
+    MINTABLE_NOW: ['MINTABLE_NOW'],
+    WHITELIST_ONLY: ['WHITELIST_ONLY'],
 };
-
-export type AlertRouteResolution = {
-    alertType: string;
-    channelId: string | null;
-    mentionRoleId: string | null;
-    source: 'override' | 'guild_route' | 'missing';
-};
-
-function preferenceFor(alertType: string): readonly string[] {
-    return ALERT_ROUTE_PREFERENCE[alertType] ?? [alertType];
-}
-
-/**
- * Resolve Discord channel + ping role for an alert.
- * Per-collection alertChannelId must NOT be used for specialized alerts — only explicit
- * overrides (e.g. hotMintChannelId, delistChannelId, wallet.alertChannelId) or guild routes.
- */
-export function resolveAlertRoute(
-    channels: AlertChannelRow[],
-    alertType: string,
-    opts?: {
-        channelOverride?: string | null;
-        mentionRoleOverride?: string | null;
-    },
-): AlertRouteResolution {
-    const prefs = preferenceFor(alertType);
-
-    let channelId: string | null = null;
-    let channelSource: AlertRouteResolution['source'] = 'missing';
-    const chOverride =
-        typeof opts?.channelOverride === 'string' ? opts.channelOverride.trim() : '';
-    if (chOverride) {
-        channelId = chOverride;
-        channelSource = 'override';
-    } else {
-        for (const t of prefs) {
-            const row = channels.find(c => c.alertType === t);
-            if (row?.discordChannelId) {
-                channelId = row.discordChannelId;
-                channelSource = 'guild_route';
-                break;
-            }
-        }
-    }
-
-    let mentionRoleId: string | null = null;
-    const roleOverride =
-        typeof opts?.mentionRoleOverride === 'string' ? opts.mentionRoleOverride.trim() : '';
-    if (roleOverride) {
-        mentionRoleId = roleOverride;
-    } else {
-        for (const t of prefs) {
-            const row = channels.find(c => c.alertType === t);
-            const id = row?.mentionRoleId;
-            if (typeof id === 'string' && id.trim()) {
-                mentionRoleId = id.trim();
-                break;
-            }
-        }
-    }
-
-    return { alertType, channelId, mentionRoleId, source: channelSource };
-}
-
-/** @deprecated Use resolveAlertRoute */
-export function resolveDiscordChannel(
-    channels: AlertChannelRow[],
-    alertType: string,
-    channelOverride?: string | null,
-): string | null {
-    return resolveAlertRoute(channels, alertType, { channelOverride }).channelId;
-}
-
-/** @deprecated Use resolveAlertRoute */
-export function resolveMentionRole(
-    channels: AlertChannelRow[],
-    alertType: string,
-    mentionRoleOverride?: string | null,
-): string | null {
-    return resolveAlertRoute(channels, alertType, { mentionRoleOverride }).mentionRoleId;
-}
